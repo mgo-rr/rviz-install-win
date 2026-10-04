@@ -1,0 +1,772 @@
+#!/usr/bin/env python3
+"""rvizmsi.py - payload staging helpers for the RViz MSI build.
+
+Runs on Windows under the build's private "tools" conda environment
+(Python 3 + conda-pack + Pillow). Pure standard library except for the
+optional Pillow import used by the ``assets`` sub-command.
+
+Sub-commands
+------------
+version   Print the MSI ProductVersion derived from rviz/package.xml.
+check-env Sanity-check the rviz build environment before compiling.
+finalize  Turn a conda-pack'ed directory into the MSI payload: third-party
+          notices + licenses, strip build-only packages, prune, launchers,
+          required-file verification, manifest.
+verify-runtime  Check that every ROS package and DLL rviz/roscore need is in
+          the payload (also run automatically by finalize).
+assets    Build MSI UI assets (icon .ico, license .rtf).
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import json
+import os
+import re
+import shutil
+import stat
+import struct
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path, PurePosixPath
+
+# Files that MUST exist in the payload or the MSI is useless.
+REQUIRED_FILES = [
+    "python.exe",
+    "Library/bin/rviz.exe",
+    "Library/bin/rviz.dll",
+    "Library/bin/rospack.exe",
+    "Library/bin/RenderSystem_GL.dll",
+    "Library/bin/Plugin_OctreeSceneManager.dll",
+    "Library/bin/Plugin_ParticleFX.dll",
+    "Library/share/rviz/package.xml",
+    "Library/share/rviz/plugin_description.xml",
+    "Library/share/rviz/ogre_media",
+    "Library/plugins/platforms/qwindows.dll",
+]
+
+# ROS packages that must be present (Library/share/<pkg>/package.xml) for rviz
+# to run and for roscore to start a master: rviz's run dependencies from its
+# package.xml plus the roscore chain.
+REQUIRED_ROS_PACKAGES = [
+    # rviz run dependencies
+    "geometry_msgs", "image_transport", "interactive_markers", "laser_geometry",
+    "map_msgs", "message_filters", "nav_msgs", "pluginlib", "python_qt_binding",
+    "resource_retriever", "rosconsole", "roscpp", "roslib", "rospy",
+    "sensor_msgs", "std_msgs", "std_srvs", "tf2_ros", "tf2_geometry_msgs",
+    "urdf", "visualization_msgs", "media_export", "message_runtime",
+    # ROS master / core tools
+    "roslaunch", "rosmaster", "rosout", "rosgraph", "rosgraph_msgs",
+    "rosparam", "rospack", "rostopic", "rosnode", "rosservice",
+]
+
+# rosdep keys that are system libraries (provided by conda packages, not ROS
+# packages). Anything else a ROS package depends on must be a ROS package.
+SYSTEM_DEP_PREFIXES = ("lib", "python3-", "python-", "qt")
+SYSTEM_DEPS = {
+    "assimp", "assimp-dev", "boost", "bzip2", "cmake", "console_bridge", "curl",
+    "eigen", "gpgme", "gtest", "graphviz", "lz4", "opengl", "openssl",
+    "pkg-config", "poco", "python3", "qtbase5-dev", "sbcl", "tango-icon-theme",
+    "tinyxml", "tinyxml2", "uuid", "yaml-cpp", "zlib", "google-mock", "procps",
+    "hddtemp", "git", "wget", "unzip", "gnupg", "ca-certificates",
+}
+
+# Starting points of the DLL dependency closure check (globs, payload-relative).
+DLL_ROOTS = [
+    "python.exe", "Library/bin/rviz.exe", "Library/bin/rviz*.dll",
+    "Library/bin/rospack.exe", "Library/lib/rosout/rosout.exe",
+    "Library/bin/RenderSystem_GL.dll", "Library/bin/Plugin_*.dll",
+    "Library/bin/Codec_*.dll", "Library/plugins/platforms/*.dll",
+    "Library/plugins/imageformats/*.dll", "Library/bin/*image_transport*.dll",
+]
+# Directories searched for a DLL besides the importing binary's own folder,
+# in the same order as the PATH set by launchers/ros_env.bat.
+DLL_SEARCH_DIRS = ["", "Library/mingw-w64/bin", "Library/usr/bin", "Library/bin",
+                   "Scripts", "bin", "DLLs"]
+
+# ROS command-line tools that get a thin launcher in <prefix>\launchers\.
+ROS_TOOLS = [
+    "roscore", "roslaunch", "rostopic", "rosnode", "rosservice", "rosparam",
+    "rosmsg", "rossrv", "rospack",
+]
+
+
+def log(msg: str) -> None:
+    print(f"[rvizmsi] {msg}", flush=True)
+
+
+def die(msg: str, code: int = 1) -> None:
+    print(f"[rvizmsi] ERROR: {msg}", file=sys.stderr, flush=True)
+    sys.exit(code)
+
+
+def read_list(path: Path) -> list[str]:
+    """Read a config list: one entry per line, '#' comments, blanks ignored."""
+    out = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            out.append(line)
+    return out
+
+
+def _on_rm_error(func, path, _exc):
+    # Windows: read-only files cannot be deleted until the bit is cleared.
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def remove_path(p: Path) -> None:
+    if p.is_symlink() or p.is_file():
+        try:
+            p.unlink()
+        except PermissionError:
+            os.chmod(p, stat.S_IWRITE)
+            p.unlink()
+    elif p.is_dir():
+        shutil.rmtree(p, onerror=_on_rm_error)
+
+
+# --------------------------------------------------------------------------- #
+# version
+# --------------------------------------------------------------------------- #
+def rviz_version(src: Path) -> str:
+    root = ET.parse(src / "package.xml").getroot()
+    ver = (root.findtext("version") or "").strip()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", ver):
+        die(f"unexpected rviz version in package.xml: {ver!r}")
+    return ver
+
+
+def msi_version(rviz_ver: str, build_number: int) -> str:
+    major, minor, patch = (int(x) for x in rviz_ver.split("."))
+    if not 0 <= build_number <= 99:
+        die("BUILD_NUMBER must be between 0 and 99")
+    field3 = patch * 100 + build_number
+    if major > 255 or minor > 255 or field3 > 65535:
+        die(f"version {rviz_ver}+{build_number} does not fit MSI limits")
+    return f"{major}.{minor}.{field3}"
+
+
+def cmd_version(a) -> None:
+    v = rviz_version(Path(a.rviz_src))
+    print(msi_version(v, a.build_number) if not a.raw else v)
+
+
+# --------------------------------------------------------------------------- #
+# conda metadata helpers
+# --------------------------------------------------------------------------- #
+def load_conda_meta(prefix: Path) -> dict[str, dict]:
+    meta_dir = prefix / "conda-meta"
+    if not meta_dir.is_dir():
+        die(f"no conda-meta directory in {prefix}")
+    pkgs = {}
+    for f in sorted(meta_dir.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            die(f"cannot parse {f}: {exc}")
+        if "name" in data:
+            data["_meta_file"] = f.name
+            pkgs[data["name"]] = data
+    return pkgs
+
+
+def dep_name(spec: str) -> str:
+    return re.split(r"[\s=<>!~\[]", spec.strip(), maxsplit=1)[0]
+
+
+def cmd_check_env(a) -> None:
+    prefix = Path(a.prefix)
+    pkgs = load_conda_meta(prefix)
+    if "ros-noetic-rviz" in pkgs:
+        die("ros-noetic-rviz is installed in the build environment; it would "
+            "clash with the from-source build. Remove it from the package list.")
+    missing = [n for n in ("python", "ros-noetic-catkin", "ogre", "qt-main")
+               if n not in pkgs]
+    if missing:
+        die(f"build environment is missing: {', '.join(missing)}")
+    log(f"environment OK: {len(pkgs)} packages, python "
+        f"{pkgs['python']['version']}, ogre {pkgs['ogre']['version']}, "
+        f"qt-main {pkgs['qt-main']['version']}")
+
+
+# --------------------------------------------------------------------------- #
+# finalize
+# --------------------------------------------------------------------------- #
+def find_extracted_dir(pkg: dict, pkgs_dirs: list[Path]) -> Path | None:
+    cand = pkg.get("extracted_package_dir")
+    if cand and Path(cand).is_dir():
+        return Path(cand)
+    stem = f"{pkg['name']}-{pkg['version']}-{pkg.get('build', '')}"
+    for d in pkgs_dirs:
+        if (d / stem).is_dir():
+            return d / stem
+    return None
+
+
+def collect_licenses(stage: Path, pkgs: dict, pkgs_dirs: list[Path]) -> None:
+    lic_root = stage / "licenses"
+    lic_root.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "THIRD-PARTY SOFTWARE NOTICES",
+        "============================",
+        "",
+        "This installer bundles the following packages (from conda-forge and",
+        "RoboStack). Full license texts, where provided by the package, are in",
+        "the 'licenses' folder next to this file.",
+        "",
+        f"{'Package':<45} {'Version':<22} License",
+        f"{'-' * 45} {'-' * 22} {'-' * 30}",
+    ]
+    without = []
+    for name in sorted(pkgs):
+        p = pkgs[name]
+        lines.append(f"{name:<45} {p.get('version', '?'):<22} "
+                     f"{p.get('license', 'UNKNOWN')}")
+        src = find_extracted_dir(p, pkgs_dirs)
+        lic_dir = src / "info" / "licenses" if src else None
+        if lic_dir and lic_dir.is_dir():
+            shutil.copytree(lic_dir, lic_root / name, dirs_exist_ok=True)
+        else:
+            without.append(name)
+    lines += ["", "RViz itself is BSD-3-Clause licensed (see licenses/rviz)."]
+    (stage / "THIRD_PARTY_NOTICES.txt").write_text(
+        "\r\n".join(lines) + "\r\n", encoding="utf-8")
+    log(f"licenses collected for {len(pkgs) - len(without)}/{len(pkgs)} packages")
+    if without:
+        log("no license files in package cache for: " + ", ".join(without[:20])
+            + (" ..." if len(without) > 20 else ""))
+
+
+def strip_build_only(stage: Path, pkgs: dict, names: list[str]) -> set[str]:
+    stripped = set()
+    for name in names:
+        pkg = pkgs.get(name)
+        if not pkg:
+            continue
+        users = sorted(other for other, p in pkgs.items()
+                       if other != name and other not in names
+                       and any(dep_name(d) == name for d in p.get("depends", [])))
+        if users:
+            log(f"keeping build-only package {name}: required by {', '.join(users[:5])}")
+            continue
+        removed = 0
+        for rel in pkg.get("files", []):
+            target = stage / rel
+            if target.is_file() or target.is_symlink():
+                remove_path(target)
+                removed += 1
+        stripped.add(name)
+        log(f"stripped {name} ({removed} files)")
+    return stripped
+
+
+def matches(rel: str, pattern: str) -> bool:
+    """fnmatch with '**' meaning 'any number of path segments'."""
+    rel_parts = rel.split("/")
+    pat_parts = pattern.split("/")
+
+    def rec(i: int, j: int) -> bool:
+        if j == len(pat_parts):
+            return i == len(rel_parts)
+        if pat_parts[j] == "**":
+            return any(rec(k, j + 1) for k in range(i, len(rel_parts) + 1))
+        if i == len(rel_parts):
+            return False
+        return (fnmatch.fnmatchcase(rel_parts[i].lower(), pat_parts[j].lower())
+                and rec(i + 1, j + 1))
+
+    return rec(0, 0)
+
+
+def prune(stage: Path, patterns: list[str], keep_pdb: bool) -> None:
+    pats = [p.strip("/").replace("\\", "/") for p in patterns]
+    if not keep_pdb:
+        pats.append("**/*.pdb")
+    removed = 0
+    # Walk top-down so that a matched directory is removed in one go.
+    for dirpath, dirnames, filenames in os.walk(stage, topdown=True):
+        base = Path(dirpath)
+        rel_base = base.relative_to(stage).as_posix()
+        rel_base = "" if rel_base == "." else rel_base + "/"
+        keep_dirs = []
+        for d in dirnames:
+            rel = rel_base + d
+            if any(matches(rel, p) for p in pats):
+                remove_path(base / d)
+                removed += 1
+            else:
+                keep_dirs.append(d)
+        dirnames[:] = keep_dirs
+        for f in filenames:
+            if any(matches(rel_base + f, p) for p in pats):
+                remove_path(base / f)
+                removed += 1
+    # Drop directories left empty by stripping/pruning (MSI would create them).
+    for dirpath, dirnames, filenames in os.walk(stage, topdown=False):
+        p = Path(dirpath)
+        if p != stage and not any(p.iterdir()):
+            p.rmdir()
+    log(f"pruned {removed} paths")
+
+
+def verify_required(stage: Path) -> None:
+    missing = [r for r in REQUIRED_FILES if not (stage / r).exists()]
+    lib = stage / "Library"
+    if not any((lib / "bin" / n).exists()
+               for n in ("roscore", "roscore.exe", "roscore.bat", "roscore-script.py")):
+        missing.append("Library/bin/roscore (any of: none/.exe/.bat/-script.py)")
+    if lib.is_dir() and not any(lib.rglob("rosout.exe")):
+        missing.append("rosout.exe (rosout node, needed by roscore)")
+    if missing:
+        die("payload is missing required files:\n  " + "\n  ".join(missing))
+    log("all required runtime files present")
+
+
+# --------------------------------------------------------------------------- #
+# ROS package dependency check
+# --------------------------------------------------------------------------- #
+def ros_run_deps(package_xml: Path) -> set[str]:
+    """Run-time dependencies declared in a package.xml (format 1, 2 or 3)."""
+    try:
+        root = ET.parse(package_xml).getroot()
+    except ET.ParseError:
+        return set()
+    tags = ("depend", "exec_depend", "run_depend", "build_export_depend")
+    out = set()
+    for t in tags:
+        for el in root.findall(t):
+            if el.attrib.get("condition", "").replace(" ", "") in ("$ROS_PYTHON_VERSION==2",):
+                continue
+            if el.text:
+                out.add(el.text.strip())
+    return out
+
+
+def is_system_dep(name: str) -> bool:
+    return name in SYSTEM_DEPS or name.startswith(SYSTEM_DEP_PREFIXES)
+
+
+def check_ros_packages(stage: Path) -> list[str]:
+    """Return problems: missing required ROS packages, and ROS run-dependencies
+    (followed transitively from rviz and the core tools) that are absent."""
+    share = stage / "Library" / "share"
+    installed = {p.parent.name for p in share.glob("*/package.xml")}
+    problems = [f"ROS package '{p}' is not in the payload"
+                for p in REQUIRED_ROS_PACKAGES if p not in installed]
+    seen, queue = set(), ["rviz"] + [p for p in REQUIRED_ROS_PACKAGES if p in installed]
+    while queue:
+        pkg = queue.pop()
+        if pkg in seen:
+            continue
+        seen.add(pkg)
+        for dep in sorted(ros_run_deps(share / pkg / "package.xml")):
+            if dep in installed:
+                queue.append(dep)
+            elif not is_system_dep(dep):
+                problems.append(f"'{pkg}' needs ROS package '{dep}', which is not in the payload")
+    log(f"ROS packages: {len(installed)} installed, {len(seen)} in rviz/roscore closure")
+    return sorted(set(problems))
+
+
+# --------------------------------------------------------------------------- #
+# DLL dependency check (pure-Python PE import reader)
+# --------------------------------------------------------------------------- #
+def pe_imports(path: Path, delay: bool = False) -> list[str]:
+    """DLL names imported by a PE file (normal imports, or delay-load imports)."""
+    data = path.read_bytes()
+    if data[:2] != b"MZ":
+        raise ValueError(f"{path}: not a PE file")
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    if data[pe:pe + 4] != b"PE\0\0":
+        raise ValueError(f"{path}: bad PE signature")
+    n_sections, opt_size = struct.unpack_from("<H", data, pe + 6)[0], struct.unpack_from("<H", data, pe + 20)[0]
+    opt = pe + 24
+    magic = struct.unpack_from("<H", data, opt)[0]
+    dd = opt + (112 if magic == 0x20B else 96)          # data directories
+    n_dirs = struct.unpack_from("<I", data, dd - 4)[0]
+    index = 13 if delay else 1
+    if index >= n_dirs:
+        return []
+    rva, size = struct.unpack_from("<II", data, dd + 8 * index)
+    if not rva:
+        return []
+    sections = []
+    sec = opt + opt_size
+    for i in range(n_sections):
+        vsize, vaddr, rsize, raddr = struct.unpack_from("<IIII", data, sec + 40 * i + 8)
+        sections.append((vaddr, max(vsize, rsize), raddr))
+
+    def off(r):
+        for vaddr, length, raddr in sections:
+            if vaddr <= r < vaddr + length:
+                return r - vaddr + raddr
+        raise ValueError(f"{path}: RVA {r:#x} outside sections")
+
+    def cstr(r):
+        o = off(r)
+        return data[o:data.index(b"\0", o)].decode("ascii", "replace")
+
+    names, pos = [], off(rva)
+    step, name_field = (32, 4) if delay else (20, 12)
+    while pos + step <= len(data):
+        entry = data[pos:pos + step]
+        if not any(entry):
+            break
+        name_rva = struct.unpack_from("<I", entry, name_field)[0]
+        if name_rva:
+            names.append(cstr(name_rva))
+        pos += step
+    return names
+
+
+def _system_dll(name: str, system_dirs: list[Path]) -> bool:
+    lower = name.lower()
+    if lower.startswith(("api-ms-win-", "ext-ms-")):
+        return True                                       # API sets, resolved by the loader
+    return any((d / name).exists() for d in system_dirs)
+
+
+# Present on every Windows 10/11 install (used when checking off-Windows).
+KNOWN_SYSTEM_DLLS = {n.lower() for n in """
+advapi32.dll bcrypt.dll comctl32.dll comdlg32.dll crypt32.dll d3d11.dll d3d9.dll
+dbghelp.dll dnsapi.dll dwmapi.dll dwrite.dll dxgi.dll gdi32.dll gdiplus.dll glu32.dll
+imm32.dll iphlpapi.dll kernel32.dll mpr.dll msimg32.dll msvcrt.dll netapi32.dll
+ntdll.dll ole32.dll oleaut32.dll opengl32.dll powrprof.dll psapi.dll rpcrt4.dll
+secur32.dll setupapi.dll shell32.dll shlwapi.dll ucrtbase.dll user32.dll userenv.dll
+uxtheme.dll version.dll winmm.dll winspool.drv ws2_32.dll wsock32.dll wtsapi32.dll
+mswsock.dll normaliz.dll wldap32.dll authz.dll ncrypt.dll cfgmgr32.dll hid.dll
+""".split()}
+
+
+def check_dll_closure(stage: Path, system_dirs: list[Path] | None = None,
+                      imports=None) -> tuple[list[str], int]:
+    """Follow imports from DLL_ROOTS; return (problems, binaries checked).
+    A DLL is satisfied if found next to the importer, in DLL_SEARCH_DIRS of the
+    payload, or in the Windows system directories."""
+    if system_dirs is None:
+        windir = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        system_dirs = [windir / "System32", windir] if (windir / "System32").is_dir() else []
+    imports = imports or pe_imports
+    search = [stage / d for d in DLL_SEARCH_DIRS]
+    index: dict[str, Path] = {}
+    for d in search:
+        if d.is_dir():
+            for f in d.iterdir():
+                if f.suffix.lower() in (".dll", ".pyd", ".exe"):
+                    index.setdefault(f.name.lower(), f)
+
+    queue = []
+    for pattern in DLL_ROOTS:
+        queue += sorted(stage.glob(pattern))
+    problems, seen = [], set()
+    while queue:
+        binary = queue.pop()
+        key = str(binary).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            names = imports(binary)
+        except (OSError, ValueError, struct.error) as exc:
+            problems.append(f"cannot read imports of {binary.relative_to(stage)}: {exc}")
+            continue
+        for name in names:
+            local = binary.parent / name
+            if local.exists():
+                queue.append(local)
+            elif name.lower() in index:
+                queue.append(index[name.lower()])
+            elif _system_dll(name, system_dirs) or (not system_dirs and name.lower() in KNOWN_SYSTEM_DLLS):
+                continue
+            else:
+                problems.append(f"{binary.relative_to(stage).as_posix()} needs {name}, which is not in the payload or Windows")
+    return sorted(set(problems)), len(seen)
+
+
+def verify_runtime(stage: Path) -> None:
+    problems = check_ros_packages(stage)
+    dll_problems, checked = check_dll_closure(stage)
+    log(f"DLL closure: {checked} binaries checked from {len(DLL_ROOTS)} root patterns")
+    problems += dll_problems
+    if problems:
+        die("runtime dependency check failed:\n  " + "\n  ".join(problems))
+    log("runtime dependency check passed: every ROS package and DLL rviz/roscore need is bundled")
+
+
+def cmd_verify_runtime(a) -> None:
+    verify_runtime(Path(a.stage))
+
+
+ROS_ENV_BAT = r"""@echo off
+rem ---------------------------------------------------------------------------
+rem ros_env.bat - environment for the bundled ROS Noetic + RViz.
+rem CALL this from your own scripts:  call "{prefix}\launchers\ros_env.bat"
+rem Paths are computed from this file's location, so the tree is relocatable
+rem for smoke tests even though the MSI installs to a fixed prefix.
+rem ---------------------------------------------------------------------------
+for %%I in ("%~dp0..") do set "RVIZ_ROOT=%%~fI"
+if /i "%RVIZ_ENV_ACTIVE%"=="%RVIZ_ROOT%" goto :ros_vars
+set "PATH=%RVIZ_ROOT%;%RVIZ_ROOT%\Library\mingw-w64\bin;%RVIZ_ROOT%\Library\usr\bin;%RVIZ_ROOT%\Library\bin;%RVIZ_ROOT%\Scripts;%RVIZ_ROOT%\bin;%RVIZ_ROOT%\launchers;%PATH%"
+set "RVIZ_ENV_ACTIVE=%RVIZ_ROOT%"
+set "CONDA_PREFIX=%RVIZ_ROOT%"
+rem Run package activation hooks exactly like 'conda activate' would.
+if exist "%RVIZ_ROOT%\etc\conda\activate.d" (
+  for %%F in ("%RVIZ_ROOT%\etc\conda\activate.d\*.bat") do call "%%~fF" >nul 2>&1
+)
+:ros_vars
+rem Authoritative ROS variables (override anything the hooks computed).
+set "CONDA_PREFIX=%RVIZ_ROOT%"
+set "ROS_DISTRO=noetic"
+set "ROS_VERSION=1"
+set "ROS_PYTHON_VERSION=3"
+set "ROS_ROOT=%RVIZ_ROOT%\Library\share\ros"
+set "ROS_PACKAGE_PATH=%RVIZ_ROOT%\Library\share"
+set "ROS_ETC_DIR=%RVIZ_ROOT%\Library\etc\ros"
+set "ROS_OS_OVERRIDE=conda:win64"
+set "CMAKE_PREFIX_PATH=%RVIZ_ROOT%\Library"
+set "PYTHONPATH=%RVIZ_ROOT%\Library\lib\site-packages"
+set "PYTHONHOME="
+set "PYTHONNOUSERSITE=1"
+set "PYTHONDONTWRITEBYTECODE=1"
+set "QT_PLUGIN_PATH=%RVIZ_ROOT%\Library\plugins"
+set "RVIZ_OGRE_PLUGIN_DIR=%RVIZ_ROOT%\Library\bin"
+if not defined ROS_MASTER_URI set "ROS_MASTER_URI=http://localhost:11311"
+exit /b 0
+"""
+
+RVIZ_CMD = r"""@echo off
+setlocal
+call "%~dp0ros_env.bat" || exit /b 1
+"%RVIZ_ROOT%\Library\bin\rviz.exe" %*
+exit /b %ERRORLEVEL%
+"""
+
+TOOL_SHIM = r"""@echo off
+rem {tool}.cmd - run the bundled ROS tool '{tool}' whether it was installed as
+rem .exe, .bat or an extension-less Python script. (goto, not blocks, so that
+rem arguments containing parentheses survive.)
+setlocal
+call "%~dp0ros_env.bat" || exit /b 1
+set "B=%RVIZ_ROOT%\Library\bin\{tool}"
+if exist "%B%.exe" goto run_exe
+if exist "%B%.bat" goto run_bat
+if exist "%B%-script.py" goto run_pyscript
+if exist "%B%" goto run_py
+echo {tool}: not part of this RViz bundle 1>&2
+exit /b 9009
+:run_exe
+"%B%.exe" %*
+exit /b %ERRORLEVEL%
+:run_bat
+call "%B%.bat" %*
+exit /b %ERRORLEVEL%
+:run_pyscript
+"%RVIZ_ROOT%\python.exe" "%B%-script.py" %*
+exit /b %ERRORLEVEL%
+:run_py
+"%RVIZ_ROOT%\python.exe" "%B%" %*
+exit /b %ERRORLEVEL%
+"""
+
+ROS_SHELL_CMD = r"""@echo off
+call "%~dp0ros_env.bat" || exit /b 1
+if /i "%~1"=="--home" cd /d "%USERPROFILE%"
+title ROS Noetic shell (RViz bundle)
+echo ROS Noetic environment ready  [%RVIZ_ROOT%]
+echo   ROS_MASTER_URI=%ROS_MASTER_URI%
+echo   Commands: rviz, roscore, roslaunch, rostopic, rosnode, rosservice, rosparam, rospack
+"%ComSpec%" /k
+"""
+
+
+def write_launchers(stage: Path, prefix: str) -> None:
+    d = stage / "launchers"
+    d.mkdir(parents=True, exist_ok=True)
+
+    def w(name: str, text: str) -> None:
+        # .bat/.cmd must be CRLF and ASCII for cmd.exe.
+        (d / name).write_bytes(text.replace("\r\n", "\n").replace("\n", "\r\n")
+                               .encode("ascii"))
+
+    w("ros_env.bat", ROS_ENV_BAT.replace("{prefix}", prefix))
+    w("rviz.cmd", RVIZ_CMD)
+    w("ros_shell.cmd", ROS_SHELL_CMD)
+    for tool in ROS_TOOLS:
+        w(f"{tool}.cmd", TOOL_SHIM.replace("{tool}", tool))
+    log(f"launchers written to {d}")
+
+
+def write_manifest(stage: Path, pkgs: dict, out_dir: Path) -> tuple[int, int]:
+    count = size = 0
+    rows = []
+    for dirpath, _dirs, files in os.walk(stage):
+        for f in files:
+            p = Path(dirpath) / f
+            s = p.stat().st_size
+            count += 1
+            size += s
+            rows.append(f"{s}\t{p.relative_to(stage).as_posix()}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "payload-files.tsv").write_text("\n".join(sorted(rows)) + "\n",
+                                               encoding="utf-8")
+    info = stage / "share" / "rviz-msi"
+    info.mkdir(parents=True, exist_ok=True)
+    (info / "packages.txt").write_text(
+        "".join(f"{n}={p.get('version')}={p.get('build')}\n"
+                for n, p in sorted(pkgs.items())), encoding="utf-8")
+    return count, size
+
+
+def cmd_finalize(a) -> None:
+    stage = Path(a.stage)
+    cfg = Path(a.config_dir)
+    if not stage.is_dir():
+        die(f"stage dir not found: {stage}")
+    pkgs = load_conda_meta(stage)
+    pkgs_dirs = [Path(p) for p in a.pkgs_dir]
+
+    collect_licenses(stage, pkgs, pkgs_dirs)
+    rviz_lic = Path(a.rviz_src) / "LICENSE"
+    if rviz_lic.is_file():
+        (stage / "licenses" / "rviz").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(rviz_lic, stage / "licenses" / "rviz" / "LICENSE")
+
+    stripped = strip_build_only(stage, pkgs, read_list(cfg / "build-only-packages.txt"))
+    kept = {n: p for n, p in pkgs.items() if n not in stripped}
+    remove_path(stage / "conda-meta")
+    # conda-pack's own activate scripts assume a conda-style shell; we ship
+    # launchers instead, so drop them to avoid confusing users.
+    for rel in ("Scripts/activate.bat", "Scripts/deactivate.bat",
+                "Scripts/activate", "Scripts/deactivate", "Scripts/conda-unpack.exe",
+                "Scripts/conda-unpack-script.py"):
+        remove_path(stage / rel)
+
+    prune(stage, read_list(cfg / "prune.txt"), keep_pdb=bool(a.keep_pdb))
+    verify_required(stage)
+    verify_runtime(stage)
+    write_launchers(stage, a.prefix)
+    count, size = write_manifest(stage, kept, Path(a.report_dir))
+    log(f"payload: {count} files, {size / 2**20:.0f} MiB uncompressed")
+    if count > 60000:
+        log("WARNING: >60k files - MSI install/repair will be slow; "
+            "consider extending config/prune.txt")
+
+
+# --------------------------------------------------------------------------- #
+# assets
+# --------------------------------------------------------------------------- #
+def rtf_escape(text: str) -> str:
+    out = []
+    for ch in text:
+        if ch in "\\{}":
+            out.append("\\" + ch)
+        elif ch == "\n":
+            out.append("\\par\n")
+        elif ch == "\r":
+            continue
+        elif ord(ch) > 127:
+            code = ord(ch)
+            out.append(f"\\u{code if code < 32768 else code - 65536}?")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def build_license_rtf(rviz_license: str, product: str) -> str:
+    body = (
+        f"{product}\n\n"
+        "This package contains RViz built from source together with a private "
+        "ROS Noetic runtime (RoboStack / conda-forge). Each component is "
+        "distributed under its own license; see THIRD_PARTY_NOTICES.txt and "
+        "the 'licenses' folder in the installation directory. Notable "
+        "components include Qt 5 (LGPL-3.0), OGRE (MIT), Boost (BSL-1.0) and "
+        "Python (PSF).\n\n"
+        "RViz license:\n\n" + rviz_license.strip() + "\n"
+    )
+    return ("{\\rtf1\\ansi\\ansicpg1252\\deff0\\uc1{\\fonttbl{\\f0\\fswiss Segoe UI;}}"
+            "\\viewkind4\\pard\\f0\\fs17 " + rtf_escape(body) + "}")
+
+
+def cmd_assets(a) -> None:
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    src = Path(a.rviz_src)
+    raw = (src / "LICENSE").read_bytes()
+    try:
+        lic = raw.decode("utf-8")
+    except UnicodeDecodeError:          # legacy 8-bit license file
+        lic = raw.decode("cp1252", errors="replace")
+    (out / "license.rtf").write_text(build_license_rtf(lic, a.product_name),
+                                     encoding="ascii")
+    icon_src = None
+    for cand in ("icons/package.png", "icons/default_package_icon.png", "images/splash.png"):
+        if (src / cand).is_file():
+            icon_src = src / cand
+            break
+    ico = out / "rviz.ico"
+    if a.icon and Path(a.icon).is_file():
+        shutil.copy2(a.icon, ico)
+    else:
+        try:
+            from PIL import Image  # noqa: PLC0415
+        except ImportError:
+            die("Pillow is required to build the icon (or pass --icon)")
+        if icon_src is None:
+            die("no icon source found in rviz sources; pass --icon")
+        img = Image.open(icon_src).convert("RGBA")
+        side = max(img.size)
+        canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        canvas.paste(img, ((side - img.width) // 2, (side - img.height) // 2))
+        # Pillow only emits ICO sizes <= the source, so scale up to 256 first.
+        canvas = canvas.resize((256, 256), Image.LANCZOS)
+        canvas.save(ico, sizes=[(16, 16), (24, 24), (32, 32), (48, 48),
+                                (64, 64), (128, 128), (256, 256)])
+    log(f"assets written to {out} (icon from {a.icon or icon_src})")
+
+
+# --------------------------------------------------------------------------- #
+def main(argv=None) -> None:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("version")
+    p.add_argument("--rviz-src", required=True)
+    p.add_argument("--build-number", type=int, default=0)
+    p.add_argument("--raw", action="store_true", help="print rviz version only")
+    p.set_defaults(func=cmd_version)
+
+    p = sub.add_parser("check-env")
+    p.add_argument("--prefix", required=True)
+    p.set_defaults(func=cmd_check_env)
+
+    p = sub.add_parser("finalize")
+    p.add_argument("--stage", required=True)
+    p.add_argument("--config-dir", required=True)
+    p.add_argument("--rviz-src", required=True)
+    p.add_argument("--prefix", required=True, help="final install prefix")
+    p.add_argument("--pkgs-dir", action="append", default=[])
+    p.add_argument("--report-dir", required=True)
+    p.add_argument("--keep-pdb", type=int, default=0)
+    p.set_defaults(func=cmd_finalize)
+
+    p = sub.add_parser("verify-runtime", help="re-run the ROS package + DLL dependency check")
+    p.add_argument("--stage", required=True)
+    p.set_defaults(func=cmd_verify_runtime)
+
+    p = sub.add_parser("assets")
+    p.add_argument("--rviz-src", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--product-name", required=True)
+    p.add_argument("--icon", default="")
+    p.set_defaults(func=cmd_assets)
+
+    a = ap.parse_args(argv)
+    a.func(a)
+
+
+if __name__ == "__main__":
+    main()
