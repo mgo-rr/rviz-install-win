@@ -1,0 +1,148 @@
+name: CI
+
+# Two jobs on a GitHub-hosted Windows runner (VS 2022, Git for Windows,
+# Windows PowerShell 5.1 and PowerShell 7 preinstalled):
+#
+#   checks  fast (~5 min): the PowerShell dry run under BOTH PowerShell
+#           editions, the linter, the Python tests, the WiX schema check and
+#           the rviz patch check. Runs on every push and pull request.
+#
+#   build   the real thing (~1-2 h): build-rviz-msi.ps1 end to end, then
+#           -TestInstall installs the MSI, starts roscore from it, checks
+#           rostopic/rospack/rospy, and uninstalls. -HeadlessTest skips opening
+#           the rviz window, because hosted runners have no OpenGL-capable GPU
+#           (OGRE needs OpenGL >= 1.5; Windows Server's fallback is 1.1). Runs
+#           on pushes to main and on demand, not on every pull request, since
+#           Windows minutes are billed at 2x on private repositories.
+#
+# Every log, the MSI, its checksum and the conda lock file are uploaded as
+# artifacts, including from failed runs, so a failure can be diagnosed without
+# re-running it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_build:
+        description: Run the full MSI build too
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same tests, both editions: Windows PowerShell 5.1 is what most people
+      # run the script with, and differs from 7 in native-argument passing,
+      # stderr handling and missing automatic variables.
+      - name: Dry run + unit tests (PowerShell 7)
+        shell: pwsh
+        run: ./tests/Test-Build.ps1
+
+      - name: Dry run + unit tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tests/Test-Build.ps1
+
+      - name: PSScriptAnalyzer (shipped scripts, 5.1 + 7 syntax)
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+          $findings = foreach ($f in 'build-rviz-msi.ps1', 'windows/RvizMsi.Build.ps1', 'windows/test_install.ps1') {
+            Invoke-ScriptAnalyzer -Path $f -Settings ./PSScriptAnalyzerSettings.psd1
+          }
+          $findings | Format-Table -AutoSize RuleName, ScriptName, Line, Message
+          if ($findings) { throw "$(@($findings).Count) PSScriptAnalyzer finding(s)" }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # RVIZMSI_PE_SAMPLES points the PE-import reader's cross-check at real
+      # Windows binaries (the Python installation's DLLs and .pyd files).
+      - name: Python tests (staging, dependency checks, PE reader vs pefile)
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pytest pefile pillow
+          $env:RVIZMSI_PE_SAMPLES = Join-Path $env:pythonLocation 'DLLs'
+          python -m pytest -q tests
+
+      - name: WiX definition vs the WiX 5.0.2 compiler source
+        shell: pwsh
+        run: |
+          git clone -q --depth 1 --branch v5.0.2 --filter=blob:none --sparse https://github.com/wixtoolset/wix.git $env:RUNNER_TEMP/wix
+          git -C $env:RUNNER_TEMP/wix sparse-checkout set src/wix/WixToolset.Core src/ext/Util/wixext src/ext/UI/wixext
+          python tests/check_wxs_schema.py $env:RUNNER_TEMP/wix
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: rviz patch applies to the pinned tag
+        shell: pwsh
+        run: |
+          git -c advice.detachedHead=false clone -q --depth 1 --branch 1.14.26 --config core.autocrlf=false https://github.com/ros-visualization/rviz.git $env:RUNNER_TEMP/rviz
+          git -C $env:RUNNER_TEMP/rviz apply --check --verbose (Resolve-Path patches/1.14.26/0001-windows-msvc-relocatable.patch)
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+  build:
+    needs: checks
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.full_build)
+    runs-on: windows-2022
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      # The conda package cache is the slow part of a cold build. Keyed on the
+      # package list and the toolchain pins, so a change to either starts clean.
+      - name: Cache conda packages and tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\rvb\mamba\pkgs
+            C:\rvb\tools
+            C:\rvb\.wix
+          key: rvb-${{ runner.os }}-${{ hashFiles('config/conda-packages.txt', 'config/build.psd1') }}
+          restore-keys: rvb-${{ runner.os }}-
+
+      - name: Build environment
+        shell: pwsh
+        run: ./build-rviz-msi.ps1 -CheckOnly -WorkDir C:\rvb
+
+      # Windows PowerShell 5.1, the edition the README tells people to use.
+      # The runner is elevated, so -TestInstall runs the real
+      # install / run / uninstall cycle.
+      - name: Build the MSI and test-install it
+        shell: powershell
+        run: |
+          .\build-rviz-msi.ps1 -WorkDir C:\rvb -BuildNumber ([int]$env:GITHUB_RUN_NUMBER % 100) -TestInstall -HeadlessTest
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Upload MSI
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rviz-msi
+          path: dist/
+          if-no-files-found: error
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            C:\rvb\out\*.log
+            C:\rvb\out\smoke\
+            C:\rvb\out\test-install\
+            C:\rvb\out\conda-lock-win-64.txt
+            C:\rvb\out\payload-files.tsv
+          if-no-files-found: warn
