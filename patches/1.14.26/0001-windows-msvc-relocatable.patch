@@ -1,0 +1,170 @@
+rviz 1.14.26 - Windows (MSVC + RoboStack/conda-forge) build fixes
+=================================================================
+Derived from RoboStack's ros-noetic-rviz.patch
+(https://github.com/RoboStack/ros-noetic, BSD-3-Clause), with changes:
+  * Ogre plugin lookup: RVIZ_OGRE_PLUGIN_DIR -> CONDA_PREFIX -> compile-time
+    path (no NULL dereference when CONDA_PREFIX is unset).
+  * Removed Linux-only library path and debug message(WARNING) lines.
+  * New CMake option RVIZ_BUILD_PYTHON_BINDINGS (default ON).
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b1cd592..cd811e5 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,6 +1,11 @@
+ cmake_minimum_required(VERSION 3.5)
+ project(rviz)
+ 
++## Restrict Windows header namespace usage
++if(WIN32)
++  add_definitions(-DNOGDI)
++endif()
++
+ if (POLICY CMP0042)
+   cmake_policy(SET CMP0042 NEW)
+ endif()
+@@ -98,10 +103,10 @@ if(APPLE)
+ endif()
+ 
+ # Prefer newer vendor-specific OpenGL library
+-if (POLICY CMP0072)
+-  cmake_policy(SET CMP0072 NEW)
+-endif()
+-find_package(OpenGL REQUIRED)
++# if (POLICY CMP0072)
++#   cmake_policy(SET CMP0072 NEW)
++# endif()
++# find_package(OpenGL REQUIRED)
+ 
+ set(CMAKE_AUTOMOC ON)
+ 
+@@ -226,7 +231,7 @@ catkin_package(
+ 
+ #catkin_lint: ignore_once external_directory
+ include_directories(src ${EXPORT_HEADER_DIR})
+-include_directories(SYSTEM
++include_directories(
+   ${EIGEN3_INCLUDE_DIRS}
+   ${OGRE_INCLUDE_DIRS}
+   ${OPENGL_INCLUDE_DIR}
+diff --git a/ogre_media/fonts/ogre1.10.fontdef b/ogre_media/fonts/ogre1.10.fontdef
+index 4b3c5b8..e714db0 100644
+--- a/ogre_media/fonts/ogre1.10.fontdef
++++ b/ogre_media/fonts/ogre1.10.fontdef
+@@ -1,3 +1,12 @@
++Liberation Sans
++{
++  type truetype
++  source liberation-sans/LiberationSans-Regular.ttf
++  size 18
++  resolution 96
++}
++
++# Ogre >= 1.10 has changed the format
+ font "Liberation Sans"
+ {
+   type truetype
+diff --git a/src/python_bindings/CMakeLists.txt b/src/python_bindings/CMakeLists.txt
+index aedb7ad..71bb4f3 100644
+--- a/src/python_bindings/CMakeLists.txt
++++ b/src/python_bindings/CMakeLists.txt
+@@ -1,5 +1,13 @@
+ set(rviz_BINDINGS "")
+ 
++# Allow packagers to skip the sip/PyQt bindings (e.g. when sip tooling is
++# unavailable on the target platform). Upstream behaviour is ON.
++option(RVIZ_BUILD_PYTHON_BINDINGS "Build the rviz Python (sip) bindings" ON)
++if(NOT RVIZ_BUILD_PYTHON_BINDINGS)
++  message(STATUS "rviz Python bindings disabled (RVIZ_BUILD_PYTHON_BINDINGS=OFF)")
++  return()
++endif()
++
+ # TODO(wjwwood): re-enabled PySide2 support when it is fixed.
+ # add_subdirectory(shiboken)
+ add_subdirectory(sip)
+diff --git a/src/python_bindings/sip/CMakeLists.txt b/src/python_bindings/sip/CMakeLists.txt
+index efbb497..899c875 100644
+--- a/src/python_bindings/sip/CMakeLists.txt
++++ b/src/python_bindings/sip/CMakeLists.txt
+@@ -48,6 +48,10 @@ set(rviz_sip_INCLUDE_DIRS
+   ${OGRE_INCLUDE_DIRS}
+   ${catkin_INCLUDE_DIRS}
+ )
++
++find_package(OpenGL REQUIRED)
++find_package(Threads REQUIRED)
++
+ set(rviz_sip_LIBRARIES ${rviz_LIBRARIES} ${PROJECT_NAME})
+ set(rviz_sip_LIBRARY_DIRS ${rviz_LIBRARY_DIRS} ${CATKIN_DEVEL_PREFIX}/${CATKIN_PACKAGE_LIB_DESTINATION})
+ if (MSVC)
+@@ -69,11 +73,11 @@ if(sip_helper_FOUND)
+   if(DEFINED PYTHON_EXTENSION_MODULE_SUFFIX)
+     set(rviz_sip_LIBRARY_FILE librviz_sip${PYTHON_EXTENSION_MODULE_SUFFIX})
+   elseif(APPLE)
+-    set(rviz_sip_LIBRARY_FILE librviz_sip.so)
++    set(rviz_sip_LIBRARY_FILE "librviz_sip.cpython-${PYTHON_VERSION_MAJOR}${PYTHON_VERSION_MINOR}-darwin.so")
+   elseif(WIN32)
+     set(rviz_sip_LIBRARY_FILE librviz_sip.pyd)
+   else()
+-    set(rviz_sip_LIBRARY_FILE librviz_sip${CMAKE_SHARED_LIBRARY_SUFFIX})
++    set(rviz_sip_LIBRARY_FILE "librviz_sip.cpython-${PYTHON_VERSION_MAJOR}${PYTHON_VERSION_MINOR}-${CMAKE_HOST_SYSTEM_PROCESSOR}-linux-gnu${CMAKE_SHARED_LIBRARY_SUFFIX}")
+   endif()
+   #catkin_lint: ignore_once external_file
+   install(FILES ${CATKIN_DEVEL_PREFIX}/${PYTHON_INSTALL_DIR}/rviz/${rviz_sip_LIBRARY_FILE}
+diff --git a/src/rviz/ogre_helpers/render_system.cpp b/src/rviz/ogre_helpers/render_system.cpp
+index 4005f98..1c02157 100644
+--- a/src/rviz/ogre_helpers/render_system.cpp
++++ b/src/rviz/ogre_helpers/render_system.cpp
+@@ -27,6 +27,8 @@
+  * POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++#include <cstdlib>
++
+ #include <QMetaType>
+ 
+ // This is required for QT_MAC_USE_COCOA to be set
+@@ -159,7 +161,29 @@ void RenderSystem::setupDummyWindowId()
+ 
+ void RenderSystem::loadOgrePlugins()
+ {
+-  std::string plugin_prefix = get_ogre_plugin_path() + "/";
++  // Relocatable plugin lookup (Windows MSI / conda builds):
++  //   1. RVIZ_OGRE_PLUGIN_DIR  - explicit override
++  //   2. CONDA_PREFIX          - <prefix>\Library\bin (Windows) or <prefix>/lib/OGRE
++  //   3. compile-time OGRE_PLUGIN_DIR (upstream behaviour)
++  std::string plugin_prefix;
++  const char* plugin_dir_env = std::getenv("RVIZ_OGRE_PLUGIN_DIR");
++  const char* conda_prefix_env = std::getenv("CONDA_PREFIX");
++  if (plugin_dir_env && *plugin_dir_env)
++  {
++    plugin_prefix = std::string(plugin_dir_env) + "/";
++  }
++  else if (conda_prefix_env && *conda_prefix_env)
++  {
++#ifdef _WIN32
++    plugin_prefix = std::string(conda_prefix_env) + "\\Library\\bin\\";
++#else
++    plugin_prefix = std::string(conda_prefix_env) + "/lib/OGRE/";
++#endif
++  }
++  else
++  {
++    plugin_prefix = get_ogre_plugin_path() + "/";
++  }
+ #ifdef Q_OS_MAC
+   plugin_prefix += "lib";
+ #endif
+diff --git a/src/rviz/properties/enum_property.h b/src/rviz/properties/enum_property.h
+index c3e5e87..5e29c42 100644
+--- a/src/rviz/properties/enum_property.h
++++ b/src/rviz/properties/enum_property.h
+@@ -43,7 +43,7 @@ namespace rviz
+  * option.  The integer returned will be that passed to addOption()
+  * for with the string that is currently selected.
+  */
+-class EnumProperty : public StringProperty
++class RVIZ_EXPORT EnumProperty : public StringProperty
+ {
+   Q_OBJECT
+ public:
