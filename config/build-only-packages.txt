@@ -1,0 +1,8 @@
+# conda packages whose files are removed from the MSI payload after rviz is
+# built. A package is skipped (kept) automatically if any other package in the
+# environment still depends on it.
+cmake
+ninja
+pkg-config
+sip
+pyqt-builder

@@ -1,0 +1,65 @@
+# conda specs for the rviz environment (RoboStack names for package.xml deps).
+# One spec per line; '#' starts a comment. This single environment is used to
+# BUILD rviz and is then packed into the MSI; build-only packages listed in
+# build-only-packages.txt are stripped from the payload afterwards.
+#
+# NOTE: ros-noetic-rviz itself must NOT be installed - we build it from source.
+
+# --- ROS dependencies of rviz (package.xml) ------------------------------------
+ros-noetic-catkin
+ros-noetic-cmake-modules
+ros-noetic-message-generation
+ros-noetic-message-runtime
+ros-noetic-geometry-msgs
+ros-noetic-image-transport
+ros-noetic-interactive-markers
+ros-noetic-laser-geometry
+ros-noetic-map-msgs
+ros-noetic-message-filters
+ros-noetic-nav-msgs
+ros-noetic-pluginlib
+ros-noetic-python-qt-binding
+ros-noetic-resource-retriever
+ros-noetic-rosconsole
+ros-noetic-roscpp
+ros-noetic-roslib
+ros-noetic-rospack
+ros-noetic-rospy
+ros-noetic-sensor-msgs
+ros-noetic-std-msgs
+ros-noetic-std-srvs
+ros-noetic-tf2-ros
+ros-noetic-tf2-geometry-msgs
+ros-noetic-urdf
+ros-noetic-visualization-msgs
+ros-noetic-media-export
+
+# --- Runtime convenience tools shipped with the MSI --------------------------
+ros-noetic-roslaunch
+ros-noetic-rostopic
+ros-noetic-rosnode
+ros-noetic-rosservice
+ros-noetic-rosparam
+# lets rviz's Image/Camera displays show compressed camera topics (most robots
+# publish image_raw/compressed); pulls in OpenCV
+ros-noetic-compressed-image-transport
+
+# --- System libraries (pinned to what RoboStack Noetic builds against) --------
+ogre >=1.10.12,<1.11
+qt-main 5.15.*
+assimp
+eigen
+yaml-cpp
+tinyxml2
+urdfdom
+urdfdom_headers
+libboost-devel
+
+# --- Build tools (stripped from the payload) ---------------------------------
+cmake >=3.24,<4
+ninja
+pkg-config
+sip
+pyqt
+pyqt-builder
+setuptools

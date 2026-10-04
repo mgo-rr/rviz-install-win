@@ -1,0 +1,28 @@
+# Glob patterns (relative to the payload root, '/' separators, '**' = any depth)
+# removed from the MSI payload. Nothing here is needed to RUN rviz/roscore;
+# it is headers, import libraries, CMake/pkg-config metadata and docs.
+
+Library/include
+include
+Library/lib/cmake
+Library/lib/pkgconfig
+Library/share/pkgconfig
+Library/cmake
+Library/share/*/cmake
+Library/share/doc
+Library/share/man
+Library/share/info
+Library/share/gtk-doc
+Library/doc
+Library/lib/*.lib
+Library/lib/*.a
+libs/*.lib
+Lib/test
+Lib/idlelib
+Lib/lib2to3/tests
+Library/mkspecs
+Library/bin/designer.exe
+Library/bin/linguist.exe
+Library/bin/assistant.exe
+Library/bin/qtcreator*
+**/__pycache__
