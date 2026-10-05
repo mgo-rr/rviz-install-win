@@ -178,6 +178,7 @@ Remove-Item function:Get-Command
 Write-Host 'Part 3: full pipeline dry run with recorded tools'
 $script:calls = New-Object System.Collections.Generic.List[string]
 $script:stubAdmin = $false
+$script:incompletePack = $false
 $script:failOn = $null
 $commit = 'c4964de840d97b1377456a2054662551816b0a54'
 
@@ -209,7 +210,9 @@ function Invoke-Native {
         'micromamba create (tools env)' { Touch (Join-Path $P.ToolsEnv 'Scripts\conda-pack.exe'); Touch $P.ToolsPy }
         'micromamba create*' { New-Item -ItemType Directory -Force -Path $P.Env | Out-Null }
         'install' { Touch (Join-Path $P.Env 'Library\bin\rviz.exe') }
-        'conda-pack' { New-Item -ItemType Directory -Force -Path (Join-Path $P.Stage 'conda-meta') | Out-Null }
+        'conda-pack' {
+            Touch (Join-Path $P.Stage 'conda-meta\x-1.0-0.json')
+            if (-not $script:incompletePack) { Touch (Join-Path $P.Stage 'python.exe'); Touch (Join-Path $P.Stage 'Library\bin\rviz.exe') } }
         'finalize payload' { Touch (Join-Path $P.Out 'payload-files.tsv'); Remove-Item -LiteralPath (Join-Path $P.Stage 'conda-meta') -Recurse -Force }
         'dotnet tool install wix' { Touch $P.Wix }
         'wix build' {
@@ -269,7 +272,7 @@ Assert ($all -match "micromamba create \(rviz env\) :: micromamba.exe create -y 
 Assert ($all -match 'CMake configure :: cmake.exe .*-G Ninja --compile-no-warning-as-error -DCMAKE_BUILD_TYPE=Release') 'CMake: Ninja, Release'
 Assert ($all -match '-DCATKIN_BUILD_BINARY_PACKAGE=1' -and $all -match '-DRVIZ_BUILD_PYTHON_BINDINGS=ON') 'CMake: catkin binary package, python bindings ON'
 Assert ($all -match 'compile :: cmake.exe --build \S+ --parallel 8') 'compile uses all cores'
-Assert ($all -match 'conda-pack :: conda-pack.exe -p \S+ -o \S+ --format no-archive --dest-prefix C:\\opt\\rviz\\noetic') 'conda-pack relocates to install prefix'
+Assert ($all -match 'conda-pack :: python.exe -c import sys; from conda_pack.cli import main; sys.exit\(main\(\)\) -p \S+ -o \S+ --format no-archive --dest-prefix C:\\opt\\rviz\\noetic') 'conda-pack (via the tools python) relocates to install prefix'
 Assert ($all -match 'finalize payload :: python.exe \S+rvizmsi.py finalize .*--prefix C:\\opt\\rviz\\noetic .*--keep-pdb 0') 'finalize invoked with prefix'
 Assert ($all -match 'wix build :: wix.exe build @') 'wix build uses response file'
 Assert (-not ($all -match 'UNVERIFIED')) 'every download is checksum-verified'
@@ -321,6 +324,13 @@ $rc = Run @{ Clean = [switch]$true }
 Assert ($rc -eq 1) 'compile failure -> exit code 1'
 $log = Get-ChildItem (Join-Path $work 'out') -Filter 'build-*.log' | Sort-Object LastWriteTime | Select-Object -Last 1
 Assert ((Get-Content $log.FullName -Raw) -match 'ERROR: compile failed') 'failure recorded in the log'
+$script:failOn = $null
+$script:incompletePack = $true
+$rc = Run @{ FromStep = 'pack' }
+Assert ($rc -eq 1 -and -not ((Get-StepOrder) -contains 'finalize payload')) 'incomplete conda-pack stage (exit 0) stops the build'
+$script:incompletePack = $false
+$script:failOn = 'compile'
+$rc = Run @{ Clean = [switch]$true }
 $script:failOn = $null
 $rc = Run @{}
 Assert ($rc -eq 0 -and (((Get-StepOrder)[0..1]) -join '|') -eq 'batch|CMake configure') 'next run resumes at the failed (build) step'

@@ -765,9 +765,23 @@ function Invoke-BuildStep($Ctx) {
 function Invoke-PackStep($Ctx) {
     $P = $Ctx.Paths
     if (Test-Path -LiteralPath $P.Stage) { Remove-Item -LiteralPath $P.Stage -Recurse -Force }
-    Invoke-Native -FilePath (Join-Path $P.ToolsEnv 'Scripts\conda-pack.exe') -What 'conda-pack' -ArgumentList @(
+    # Run conda-pack through the tools Python rather than the Scripts\conda-pack.exe
+    # launcher, so its real exit code and any traceback reach us: in CI the
+    # launcher once returned 0 with the stage only ~14% written. --quiet drops the
+    # carriage-return progress bar, which only bloats the log.
+    Invoke-Native -FilePath $P.ToolsPy -What 'conda-pack' -ArgumentList @(
+        '-c', 'import sys; from conda_pack.cli import main; sys.exit(main())',
         '-p', $P.Env, '-o', $P.Stage, '--format', 'no-archive', '--dest-prefix', $Ctx.Config.InstallPrefix,
-        '--n-threads', '-1', '--ignore-missing-files', '--force')
+        '--ignore-missing-files', '--force', '--quiet')
+    # Never trust a zero exit code alone: the stage must be complete.
+    foreach ($rel in 'conda-meta', 'python.exe', 'Library\bin\rviz.exe') {
+        if (-not (Test-Path -LiteralPath (Join-Path $P.Stage $rel))) {
+            $n = @(Get-ChildItem -LiteralPath $P.Stage -Recurse -File -ErrorAction SilentlyContinue).Count
+            throw "conda-pack left an incomplete stage ($rel missing, $n files in $($P.Stage))"
+        }
+    }
+    $metaCount = @(Get-ChildItem -LiteralPath (Join-Path $P.Stage 'conda-meta') -Filter '*.json').Count
+    Write-Info "stage packed: $metaCount packages in $($P.Stage)"
 }
 
 function Invoke-FinalizeStep($Ctx) {
