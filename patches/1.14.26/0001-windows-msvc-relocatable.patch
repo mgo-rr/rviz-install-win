@@ -6,9 +6,11 @@ Derived from RoboStack's ros-noetic-rviz.patch
     path (no NULL dereference when CONDA_PREFIX is unset).
   * Removed Linux-only library path and debug message(WARNING) lines.
   * New CMake option RVIZ_BUILD_PYTHON_BINDINGS (default ON).
+  * Windows: drop OGRE_LIBRARIES entries that conda-forge's OGRE 1.10 does
+    not ship (OgreBites.lib -> LNK1181); rviz uses none of them.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index b1cd592..cd811e5 100644
+index b1cd592..056beb1 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -1,6 +1,11 @@
@@ -23,7 +25,37 @@ index b1cd592..cd811e5 100644
  if (POLICY CMP0042)
    cmake_policy(SET CMP0042 NEW)
  endif()
-@@ -98,10 +103,10 @@ if(APPLE)
+@@ -34,6 +39,29 @@ if(OGRE_FOUND)
+     set(OGRE_INCLUDE_DIRS ${OGRE_INCLUDE_DIRS} ${OGRE_Overlay_INCLUDE_DIRS})
+     set(OGRE_LIBRARIES ${OGRE_LIBRARIES} ${OGRE_Overlay_LIBRARIES})
+   endif()
++  if(WIN32)
++    # conda-forge's OGRE 1.10 config lists components (e.g. OgreBites) in
++    # OGRE_LIBRARIES that the package does not ship, which ends in
++    # "LNK1181: cannot open input file 'OgreBites.lib'". rviz uses none of
++    # them: keep imported targets, absolute paths and libraries that exist.
++    set(_rviz_ogre_libraries)
++    foreach(_rviz_ogre_lib IN LISTS OGRE_LIBRARIES)
++      if(TARGET "${_rviz_ogre_lib}" OR IS_ABSOLUTE "${_rviz_ogre_lib}"
++         OR _rviz_ogre_lib MATCHES "^(debug|optimized|general)$")
++        list(APPEND _rviz_ogre_libraries "${_rviz_ogre_lib}")
++      else()
++        find_library(_rviz_ogre_lib_path NAMES "${_rviz_ogre_lib}" HINTS ${OGRE_LIBRARY_DIRS} NO_CACHE)
++        if(_rviz_ogre_lib_path)
++          list(APPEND _rviz_ogre_libraries "${_rviz_ogre_lib_path}")
++        else()
++          message(STATUS "rviz: dropping OGRE library '${_rviz_ogre_lib}' (not installed)")
++        endif()
++        unset(_rviz_ogre_lib_path)
++      endif()
++    endforeach()
++    set(OGRE_LIBRARIES ${_rviz_ogre_libraries})
++    message(STATUS "rviz: OGRE_LIBRARIES=${OGRE_LIBRARIES}")
++  endif()
+ else()
+   # OGRE doesn't come with correctly installed cmake files on Linux. Use pkg-config instead.
+   # We need both, OGRE and OGRE-Overlay. Look for both simulatenously and use prefix X_
+@@ -98,10 +126,10 @@ if(APPLE)
  endif()
  
  # Prefer newer vendor-specific OpenGL library
@@ -38,7 +70,7 @@ index b1cd592..cd811e5 100644
  
  set(CMAKE_AUTOMOC ON)
  
-@@ -226,7 +231,7 @@ catkin_package(
+@@ -226,7 +254,7 @@ catkin_package(
  
  #catkin_lint: ignore_once external_directory
  include_directories(src ${EXPORT_HEADER_DIR})
