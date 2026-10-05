@@ -10,6 +10,8 @@ Derived from RoboStack's ros-noetic-rviz.patch
     OGRE 1.10 config to full paths, dropping missing ones (LNK1181 OgreBites).
   * Link yaml-cpp through its imported target: yaml-cpp 0.8.0's config sets
     YAML_CPP_LIBRARIES to a bare "yaml-cpp" (LNK1181 yaml-cpp.lib).
+  * sip bindings (MSVC): add Boost's library directory to the sip/qmake
+    link, which Boost's header auto-linking needs (LNK1104 boost_thread.lib).
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index b1cd592..7c62956 100644
@@ -117,10 +119,10 @@ index aedb7ad..71bb4f3 100644
  # add_subdirectory(shiboken)
  add_subdirectory(sip)
 diff --git a/src/python_bindings/sip/CMakeLists.txt b/src/python_bindings/sip/CMakeLists.txt
-index efbb497..899c875 100644
+index efbb497..b434183 100644
 --- a/src/python_bindings/sip/CMakeLists.txt
 +++ b/src/python_bindings/sip/CMakeLists.txt
-@@ -48,6 +48,10 @@ set(rviz_sip_INCLUDE_DIRS
+@@ -48,8 +48,25 @@ set(rviz_sip_INCLUDE_DIRS
    ${OGRE_INCLUDE_DIRS}
    ${catkin_INCLUDE_DIRS}
  )
@@ -130,8 +132,23 @@ index efbb497..899c875 100644
 +
  set(rviz_sip_LIBRARIES ${rviz_LIBRARIES} ${PROJECT_NAME})
  set(rviz_sip_LIBRARY_DIRS ${rviz_LIBRARY_DIRS} ${CATKIN_DEVEL_PREFIX}/${CATKIN_PACKAGE_LIB_DESTINATION})
++if(MSVC)
++  # Boost's headers auto-link (#pragma comment(lib, "boost_thread.lib") etc.)
++  # and the sip/qmake build does not get Boost's library directory from the
++  # CMake targets (LNK1104 boost_thread.lib): pass it explicitly.
++  set(_rviz_boost_libdirs ${Boost_LIBRARY_DIRS})
++  if(Boost_DIR)
++    get_filename_component(_rviz_boost_cfg_libdir "${Boost_DIR}/../.." ABSOLUTE)
++    list(APPEND _rviz_boost_libdirs "${_rviz_boost_cfg_libdir}")
++  endif()
++  list(REMOVE_DUPLICATES _rviz_boost_libdirs)
++  list(APPEND rviz_sip_LIBRARY_DIRS ${_rviz_boost_libdirs})
++  message(STATUS "rviz: sip library dirs: ${rviz_sip_LIBRARY_DIRS}")
++endif()
  if (MSVC)
-@@ -69,11 +73,11 @@ if(sip_helper_FOUND)
+   set(rviz_sip_LDFLAGS_OTHER ${rviz_LDFLAGS_OTHER} /LIBPATH:\"${CATKIN_DEVEL_PREFIX}/${CATKIN_PACKAGE_LIB_DESTINATION}\")
+ else()
+@@ -69,11 +86,11 @@ if(sip_helper_FOUND)
    if(DEFINED PYTHON_EXTENSION_MODULE_SUFFIX)
      set(rviz_sip_LIBRARY_FILE librviz_sip${PYTHON_EXTENSION_MODULE_SUFFIX})
    elseif(APPLE)
