@@ -27,11 +27,17 @@ function Show-Tail([string]$Path, [int]$Lines = 40) {
 function Check($cond, $msg) { if (-not $cond) { throw $msg } }
 
 # Run a snippet of batch code in a fresh cmd.exe and return its output.
-function Invoke-Batch([string]$Body) {
+# -Paths turns '/' into '\' for comparing printed file paths; it must not be
+# used for ROS output, where '/rosout' would become '\rosout'.
+function Invoke-Batch([string]$Body, [switch]$Paths) {
   $tmp = Join-Path $env:TEMP ("rviz-test-{0}.cmd" -f [guid]::NewGuid())
   Set-Content -Path $tmp -Value "@echo off`r`n$Body" -Encoding ASCII
   $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'   # native stderr is not an error
-  try { return ((& cmd.exe /d /c $tmp 2>&1 | Out-String) -replace '/', '\') }
+  try {
+    $out = (& cmd.exe /d /c $tmp 2>&1 | Out-String)
+    if ($Paths) { $out = $out -replace '/', '\' }
+    return $out
+  }
   finally { $ErrorActionPreference = $old; Remove-Item $tmp -Force }
 }
 
@@ -68,11 +74,11 @@ try {
   Check ($help -match 'Produce this help message') 'installed rviz.exe did not start'
 
   Write-Host '[test-install] rospack find rviz (installed copy)'
-  $found = (Invoke-Batch "call `"$launchers\rospack.cmd`" find rviz 2>nul").Trim()
+  $found = (Invoke-Batch "call `"$launchers\rospack.cmd`" find rviz 2>nul" -Paths).Trim()
   Check ($found -like "$Prefix*") "rospack find rviz returned '$found'"
 
   Write-Host '[test-install] bundled python + rospy import'
-  $py = (Invoke-Batch "call `"$launchers\ros_env.bat`"`r`npython -c `"import rospy, sys; print(sys.prefix)`" 2>nul").Trim()
+  $py = (Invoke-Batch "call `"$launchers\ros_env.bat`"`r`npython -c `"import rospy, sys; print(sys.prefix)`" 2>nul" -Paths).Trim()
   Check ($py -like "$Prefix*") "bundled python/rospy check returned '$py'"
 
   # ---- live runtime: roscore from the bundle, then rviz connecting to it ----
