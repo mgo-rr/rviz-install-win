@@ -288,7 +288,7 @@ Assert (-not ($rsp -match '\\"$')) 'no response-file value ends in a backslash'
 $msiName = 'RVizNoetic-1.14.26-1.14.2603-x64.msi'
 Assert ((Test-Path (Join-Path $dist $msiName)) -and (Test-Path (Join-Path $dist "$msiName.sha256"))) 'MSI + .sha256 copied to OutputDir'
 Assert ((Get-Content (Join-Path $dist "$msiName.sha256")) -match "^[0-9a-f]{64}  $([regex]::Escape($msiName))$") 'sha256 file in standard format'
-Assert (Test-Path (Join-Path $dist 'RVizNoetic-1.14.26-1.14.2603-x64.conda-lock-win-64.txt')) 'lock file published next to the MSI'
+Assert (@(Get-ChildItem -LiteralPath $dist -File).Count -eq 2) 'only the MSI and its .sha256 are published to OutputDir'
 $log = Get-ChildItem (Join-Path $work 'out') -Filter 'build-*.log' | Select-Object -Last 1
 Assert ($log -and ((Get-Content $log.FullName -Raw) -match '==> msi')) 'build log written'
 Assert ($env:CL -ne '/DROS_BUILD_SHARED_LIBS=1 /DNOGDI=1') 'build-only variables do not leak into the session'

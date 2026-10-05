@@ -101,6 +101,8 @@ def test_finalize_end_to_end(stage, monkeypatch):
     st, pk, src, tmp = stage
     monkeypatch.setattr(rvizmsi, "pe_imports", fake_imports)
     (st / "Library/bin/OgreMain.dll").write_text("x")
+    (tmp / "out").mkdir(parents=True, exist_ok=True)
+    (tmp / "out/conda-lock-win-64.txt").write_text("@EXPLICIT\nhttps://conda.anaconda.org/x.conda\n")
     rvizmsi.main(["finalize", "--stage", str(st), "--config-dir", str(REPO / "config"),
                   "--rviz-src", str(src), "--prefix", r"C:\opt\rviz\noetic",
                   "--pkgs-dir", str(pk), "--report-dir", str(tmp / "out")])
@@ -133,6 +135,12 @@ def test_finalize_end_to_end(stage, monkeypatch):
     pk_list = (st / "share/rviz-msi/packages.txt").read_text()
     assert "cmake=" not in pk_list and "sip=" in pk_list
     assert (tmp / "out/payload-files.tsv").exists()
+    # build records travel inside the MSI
+    listed = (st / "share/rviz-msi/payload-files.tsv").read_text(encoding="utf-8")
+    assert listed == (tmp / "out/payload-files.tsv").read_text(encoding="utf-8")
+    assert "\tshare/rviz-msi/packages.txt" in listed
+    assert (st / "share/rviz-msi/conda-lock-win-64.txt").read_text().startswith("@EXPLICIT")
+    assert "\tshare/rviz-msi/conda-lock-win-64.txt" in listed
 
 
 def test_finalize_detects_missing_rviz(stage, monkeypatch):

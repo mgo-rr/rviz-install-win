@@ -19,8 +19,8 @@ name: CI
 # artifacts, including from failed runs, so a failure can be diagnosed without
 # re-running it.
 #
-#   release only for version tags (v*): attaches the tested MSI, its SHA-256
-#           and the lock file to a GitHub Release, which then shows in the
+#   release only for version tags (v*): attaches the tested MSI and its
+#           SHA-256 to a GitHub Release, which then shows in the
 #           repository's "Releases" sidebar and at /releases/latest.
 
 on:

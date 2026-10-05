@@ -110,8 +110,9 @@ cd C:\src\rviz-installer
   `Get-ChildItem -Recurse | Unblock-File` first.
 
 The first run takes about 30–60 min (env solve + downloads + compile). The
-MSI, its `.sha256`, the conda lock file and a payload file list are copied to
-`.\dist\`. The full log is in `C:\rvb\out\build-*.log`.
+MSI and its `.sha256` are copied to `.\dist\`. The conda lock file and the
+payload file list are installed with the MSI (see below) and also kept in
+`C:\rvb\out\`, next to the full log `build-*.log`.
 
 ### Options
 
@@ -122,7 +123,7 @@ MSI, its `.sha256`, the conda lock file and a payload file list are copied to
 | `-Prefix C:\opt\rviz\noetic` | install location baked into the MSI |
 | `-Manufacturer NAME` | MSI manufacturer (default "RViz MSI Builder") |
 | `-BuildNumber N` | packaging revision → MSI version 1.14.(26*100+N) |
-| `-OutputDir DIR` | where the MSI + reports are copied (default `.\dist`) |
+| `-OutputDir DIR` | where the MSI + its `.sha256` are copied (default `.\dist`) |
 | `-RvizRef REF`, `-RvizRepo URL`, `-NoCommitCheck` | rviz source |
 | `-LockFile FILE` | rebuild with the exact package set of an earlier build |
 | `-ExtraPackages a,b` | ship more RoboStack packages (e.g. `ros-noetic-rviz-imu-plugin`) |
@@ -165,6 +166,9 @@ Pinned defaults (versions, hashes, product identity, UpgradeCode) live in
   starting rviz.
 * Upgrades: same `UpgradeCode` + higher version means an in-place major
   upgrade (old version removed first). Downgrades are blocked.
+* Build records in `share\rviz-msi\`: `packages.txt` (conda packages),
+  `conda-lock-win-64.txt` (the exact environment, usable with `-LockFile`) and
+  `payload-files.tsv` (size and path of every installed file).
 * Uninstall removes everything, including runtime `.pyc` caches, shortcuts
   and the PATH entry.
 
@@ -261,8 +265,9 @@ Work dir (`C:\rvb`): `tools\` (micromamba, dotnet, wix), `mamba\pkgs`
 
 ## Reproducible / CI builds
 
-* Every build writes `out\conda-lock-win-64.txt` (also copied to `dist\`).
-  Commit it, then rebuild with the same dependencies using `-LockFile <file>`.
+* Every build writes `out\conda-lock-win-64.txt`, and the MSI installs a copy
+  as `C:\opt\rviz\noetic\share\rviz-msi\conda-lock-win-64.txt`. Rebuild with
+  exactly the same dependencies using `-LockFile <file>`.
 * rviz is pinned by tag **and** commit. micromamba is pinned by version +
   SHA-256, WiX by version, and the .NET SDK is checked against Microsoft's
   SHA-512.
@@ -294,8 +299,8 @@ git push origin v1.14.26-1
 ```
 
 CI builds and test-installs the MSI as usual; if everything passes, the
-`release` job creates the GitHub Release `v1.14.26-1` with the MSI, its
-`.sha256`, the conda lock file and the payload file list attached. It then
+`release` job creates the GitHub Release `v1.14.26-1` with the MSI and its
+`.sha256` attached. It then
 appears under *Releases* on the repository's main page and at
 `/releases/latest`. A failed build publishes nothing; delete the tag, fix,
 and tag again.

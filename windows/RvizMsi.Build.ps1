@@ -886,12 +886,10 @@ function Invoke-MsiStep($Ctx) {
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $msi).Hash.ToLowerInvariant()
     Set-Content -LiteralPath "$msi.sha256" -Value "$hash  $($Ctx.MsiName)" -Encoding ASCII
     New-Item -ItemType Directory -Force -Path $Ctx.OutputDir | Out-Null
+    # Only the MSI and its checksum are published; the conda lock file and the
+    # payload file list are installed with the MSI (<prefix>\share\rviz-msi\) and
+    # stay in the work dir's out\ folder.
     Copy-Item -LiteralPath $msi, "$msi.sha256" -Destination $Ctx.OutputDir -Force
-    $stem = [IO.Path]::GetFileNameWithoutExtension($Ctx.MsiName)
-    foreach ($f in 'conda-lock-win-64.txt', 'payload-files.tsv') {
-        $src = Join-Path $P.Out $f
-        if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $Ctx.OutputDir "$stem.$f") -Force }
-    }
     Write-Info ("MSI: {0} ({1:N0} MiB, sha256 {2})" -f (Join-Path $Ctx.OutputDir $Ctx.MsiName), ($size / 1MB), $hash)
 }
 

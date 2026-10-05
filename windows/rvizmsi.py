@@ -719,6 +719,18 @@ def write_launchers(stage: Path, prefix: str) -> None:
 
 
 def write_manifest(stage: Path, pkgs: dict, out_dir: Path) -> tuple[int, int]:
+    """Build records installed with the MSI, in <prefix>\\share\\rviz-msi\\:
+    packages.txt (conda packages), conda-lock-win-64.txt (exact environment, for
+    -LockFile rebuilds) and payload-files.tsv (size and path of every payload
+    file). The file list is also written to out_dir for the build reports."""
+    info = stage / "share" / "rviz-msi"
+    info.mkdir(parents=True, exist_ok=True)
+    (info / "packages.txt").write_text(
+        "".join(f"{n}={p.get('version')}={p.get('build')}\n"
+                for n, p in sorted(pkgs.items())), encoding="utf-8")
+    lock = out_dir / "conda-lock-win-64.txt"
+    if lock.is_file():
+        shutil.copy2(lock, info / "conda-lock-win-64.txt")
     count = size = 0
     rows = []
     for dirpath, _dirs, files in os.walk(stage):
@@ -728,15 +740,11 @@ def write_manifest(stage: Path, pkgs: dict, out_dir: Path) -> tuple[int, int]:
             count += 1
             size += s
             rows.append(f"{s}\t{p.relative_to(stage).as_posix()}")
+    listing = "\n".join(sorted(rows)) + "\n"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "payload-files.tsv").write_text("\n".join(sorted(rows)) + "\n",
-                                               encoding="utf-8")
-    info = stage / "share" / "rviz-msi"
-    info.mkdir(parents=True, exist_ok=True)
-    (info / "packages.txt").write_text(
-        "".join(f"{n}={p.get('version')}={p.get('build')}\n"
-                for n, p in sorted(pkgs.items())), encoding="utf-8")
-    return count, size
+    (out_dir / "payload-files.tsv").write_text(listing, encoding="utf-8")
+    (info / "payload-files.tsv").write_text(listing, encoding="utf-8")   # lists every file but itself
+    return count + 1, size + len(listing.encode("utf-8"))
 
 
 def cmd_finalize(a) -> None:
