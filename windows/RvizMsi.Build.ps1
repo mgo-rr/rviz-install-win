@@ -734,7 +734,12 @@ function Invoke-BuildStep($Ctx) {
         Write-Info "MSVC $($env:VCToolsVersion); link.exe: $(if ($link) { $link } else { 'NOT FOUND' })"
         if (-not $link -or $link -notmatch '\\Tools\\MSVC\\') { throw 'MSVC link.exe is not first on PATH (another link.exe shadows it)' }
         $cmake = Join-Path $P.Env 'Library\bin\cmake.exe'
-        Invoke-Native -FilePath $cmake -What 'CMake configure' -ArgumentList @(
+        # Run CMake from the source tree: catkin's generated python_distutils_install.bat
+        # does a plain `cd "<source dir>"` (no /d), which cannot switch drives, so an
+        # install started from another drive (e.g. D:\a\... on CI runners) runs rviz's
+        # setup.py in the wrong folder ("Path '.' is neither a directory containing a
+        # package.xml"). Same drive as the source => the cd works.
+        Invoke-Native -FilePath $cmake -WorkingDirectory $P.Src -What 'CMake configure' -ArgumentList @(
             '-S', ($P.Src -replace '\\', '/'), '-B', ($P.Build -replace '\\', '/'), '-G', 'Ninja',
             '--compile-no-warning-as-error',
             '-DCMAKE_BUILD_TYPE=Release',
@@ -750,8 +755,8 @@ function Invoke-BuildStep($Ctx) {
             '-DCATKIN_BUILD_BINARY_PACKAGE=1',
             '-DCATKIN_SKIP_TESTING=ON',
             "-DRVIZ_BUILD_PYTHON_BINDINGS=$bindings")
-        Invoke-Native -FilePath $cmake -What 'compile' -ArgumentList @('--build', $P.Build, '--parallel', "$jobs")
-        Invoke-Native -FilePath $cmake -What 'install' -ArgumentList @('--install', $P.Build)
+        Invoke-Native -FilePath $cmake -WorkingDirectory $P.Src -What 'compile' -ArgumentList @('--build', $P.Build, '--parallel', "$jobs")
+        Invoke-Native -FilePath $cmake -WorkingDirectory $P.Src -What 'install' -ArgumentList @('--install', $P.Build)
     }
     if (-not (Test-Path -LiteralPath (Join-Path $P.Env 'Library\bin\rviz.exe'))) { throw 'rviz.exe was not installed' }
     Write-Info "rviz installed into $($P.Env)\Library"
