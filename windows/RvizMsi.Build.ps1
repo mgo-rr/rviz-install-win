@@ -859,7 +859,12 @@ function Invoke-MsiStep($Ctx) {
     $env:DOTNET_ROOT = $P.Dotnet
     Invoke-Native -FilePath $P.Wix -WorkingDirectory $P.Work -What 'wix build' -ArgumentList @('build', "@$($P.Rsp)")
     if (-not $Ctx.SkipValidate) {
-        Invoke-Native -FilePath $P.Wix -WorkingDirectory $P.Work -What 'ICE validation (use -SkipValidate to bypass)' -ArgumentList @('msi', 'validate', $msi)
+        Invoke-Native -FilePath $P.Wix -WorkingDirectory $P.Work -What 'ICE validation (use -SkipValidate to bypass)' -ArgumentList @(
+            # ICE60: conda DLLs with a version resource but no language - harmless,
+            #        and WiX's <Files> harvesting cannot set a Language per file.
+            # ICE61: MajorUpgrade AllowSameVersionUpgrades="yes" is deliberate (a
+            #        rebuild with the same -BuildNumber must replace the old one).
+            'msi', 'validate', '-sice', 'ICE60', '-sice', 'ICE61', $msi)
     }
     if ($C.SignThumbprint -or $C.SignPfx) {
         $st = $Ctx.HostInfo.SignTool

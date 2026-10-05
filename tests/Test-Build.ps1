@@ -278,6 +278,7 @@ Assert ($all -match 'conda-pack :: python.exe -X faulthandler -c import sys; fro
 Assert ($all -match 'unpack stage :: tar.exe -xf \S+rviz-env.tar -C \S+stage') 'archive unpacked into the stage'
 Assert ($all -match 'finalize payload :: python.exe \S+rvizmsi.py finalize .*--prefix C:\\opt\\rviz\\noetic .*--keep-pdb 0') 'finalize invoked with prefix'
 Assert ($all -match 'wix build :: wix.exe build @') 'wix build uses response file'
+Assert ($all -match 'ICE validation \(use -SkipValidate to bypass\) :: wix.exe msi validate -sice ICE60 -sice ICE61 ') 'ICE validation suppresses only ICE60/ICE61'
 Assert (-not ($all -match 'UNVERIFIED')) 'every download is checksum-verified'
 Assert (($all -match 'MSI assets :: python.exe \S+ assets ') -and -not ($all -match '--icon')) 'no empty --icon argument by default'
 Assert ($script:lastActivation -match 'activate\.d' -and $script:lastActivation -match 'call "C:\\VS\\vcvars64.bat"') 'build env = conda activation then vcvars64'
