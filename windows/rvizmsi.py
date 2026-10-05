@@ -600,11 +600,21 @@ rem is started in a minimized window first and stopped again when RViz exits.
 rem A remote master (a robot) is never touched: RViz just connects to it.
 rem   RVIZ_AUTO_ROSCORE=0   never start a local roscore
 rem   RVIZ_KEEP_ROSCORE=1   leave the auto-started roscore running after RViz
+rem   RVIZ_NO_PAUSE=1       do not keep the window open after a failure
+rem If RViz fails, the window stays open with the error and the log location,
+rem so a Start menu launch never just flashes and disappears.
 rem (goto, not blocks, so that arguments containing parentheses survive.)
 rem ---------------------------------------------------------------------------
 setlocal
-call "%~dp0ros_env.bat" || exit /b 1
+title RViz (ROS Noetic)
+call "%~dp0ros_env.bat"
+if errorlevel 1 goto env_failed
 set "RVIZ_STARTED_ROSCORE="
+set "RVIZ_INTERACTIVE=1"
+if /i "%~1"=="--help" set "RVIZ_INTERACTIVE="
+if /i "%~1"=="-h" set "RVIZ_INTERACTIVE="
+if "%RVIZ_NO_PAUSE%"=="1" set "RVIZ_INTERACTIVE="
+echo [rviz] ROS_MASTER_URI=%ROS_MASTER_URI%
 if /i "%~1"=="--help" goto run
 if /i "%~1"=="-h" goto run
 if "%RVIZ_AUTO_ROSCORE%"=="0" goto run
@@ -634,6 +644,7 @@ goto run
 echo [rviz] roscore is up
 :run
 if "%RVIZ_LAUNCHER_DRYRUN%"=="1" goto dry_run
+echo [rviz] starting RViz ...
 "%RVIZ_ROOT%\Library\bin\rviz.exe" %*
 set "RC=%ERRORLEVEL%"
 goto finish
@@ -641,10 +652,24 @@ goto finish
 echo [rviz] dry run: rviz.exe not started
 set "RC=0"
 :finish
-if not defined RVIZ_STARTED_ROSCORE exit /b %RC%
-if "%RVIZ_KEEP_ROSCORE%"=="1" exit /b %RC%
+if not defined RVIZ_STARTED_ROSCORE goto report
+if "%RVIZ_KEEP_ROSCORE%"=="1" goto report
 call :stop_roscore
+:report
+if "%RC%"=="0" exit /b 0
+echo.
+echo [rviz] RViz exited with error code %RC%.
+echo [rviz] The messages above show why. RViz's own log files are in:
+if defined ROS_HOME (echo [rviz]   %ROS_HOME%\log) else (echo [rviz]   %USERPROFILE%\.ros\log)
+echo [rviz] A common cause is a missing or too old OpenGL graphics driver
+echo [rviz] (e.g. some remote desktop sessions and virtual machines).
+if defined RVIZ_INTERACTIVE pause
 exit /b %RC%
+
+:env_failed
+echo [rviz] could not set up the ROS environment (launchers\ros_env.bat failed).
+if not "%RVIZ_NO_PAUSE%"=="1" pause
+exit /b 1
 
 :master_online
 "%RVIZ_ROOT%\python.exe" -c "import sys, rosgraph; sys.exit(0 if rosgraph.is_master_online() else 1)" >nul 2>&1

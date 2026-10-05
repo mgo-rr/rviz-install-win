@@ -302,7 +302,12 @@ def test_rviz_launcher_auto_roscore(tmp_path):
     assert 'start "roscore (started by RViz)" /min' in text
     assert "rosgraph.is_master_online()" in text
     # it only stops a roscore it started itself
-    assert "if not defined RVIZ_STARTED_ROSCORE exit /b %RC%" in text
+    assert "if not defined RVIZ_STARTED_ROSCORE goto report" in text
     assert "taskkill /T /F /PID %RPID%" in text
     # no `timeout` (fails without a console); ping is used to wait
     assert "timeout /t" not in text and "ping -n 2 127.0.0.1" in text
+    # a failed start keeps the window open (but never for --help / tests)
+    assert "if errorlevel 1 goto env_failed" in text
+    assert "if defined RVIZ_INTERACTIVE pause" in text
+    assert 'if /i "%~1"=="--help" set "RVIZ_INTERACTIVE="' in text
+    assert 'if "%RVIZ_NO_PAUSE%"=="1" set "RVIZ_INTERACTIVE="' in text

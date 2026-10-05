@@ -12,6 +12,7 @@ param(
   [switch]$SkipGui
 )
 $ErrorActionPreference = 'Stop'
+$env:RVIZ_NO_PAUSE = '1'   # rviz.cmd must never wait for a key press in this test
 
 function Fail($msg) { Write-Host "[test-install] FAIL: $msg"; exit 1 }
 

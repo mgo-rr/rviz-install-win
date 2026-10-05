@@ -332,6 +332,7 @@ pipeline** with every external tool replaced by a recorder:
 
 | Symptom | Fix |
 |---|---|
+| Start menu *RViz* opens a window that closes at once (installers before v1.14.26-2) | Press Win+R, run `cmd /k C:\opt\rviz\noetic\launchers\rviz.cmd`: the window stays open and shows the error. From v1.14.26-2 on, the launcher keeps its window open by itself when RViz fails |
 | `... cannot be loaded because running scripts is disabled` | `powershell -ExecutionPolicy Bypass -File .\build-rviz-msi.ps1 ...` (and `Unblock-File` for downloaded zips) |
 | `Git for Windows (Git Bash) is required` | Install Git for Windows, or re-run with `-InstallGit` |
 | Git download: `SHA-256 mismatch`, signature not `Valid`, or unexpected signer | The download was corrupted, tampered with, or not published by the Git for Windows maintainer; nothing was installed |
