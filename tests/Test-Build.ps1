@@ -179,6 +179,7 @@ Write-Host 'Part 3: full pipeline dry run with recorded tools'
 $script:calls = New-Object System.Collections.Generic.List[string]
 $script:stubAdmin = $false
 $script:incompletePack = $false
+$script:noArchive = $false
 $script:failOn = $null
 $commit = 'c4964de840d97b1377456a2054662551816b0a54'
 
@@ -210,7 +211,8 @@ function Invoke-Native {
         'micromamba create (tools env)' { Touch (Join-Path $P.ToolsEnv 'Scripts\conda-pack.exe'); Touch $P.ToolsPy }
         'micromamba create*' { New-Item -ItemType Directory -Force -Path $P.Env | Out-Null }
         'install' { Touch (Join-Path $P.Env 'Library\bin\rviz.exe') }
-        'conda-pack' {
+        'conda-pack' { if (-not $script:noArchive) { Touch $ArgumentList[[array]::IndexOf($ArgumentList, '-o') + 1] } }
+        'unpack stage' {
             Touch (Join-Path $P.Stage 'conda-meta\x-1.0-0.json')
             if (-not $script:incompletePack) { Touch (Join-Path $P.Stage 'python.exe'); Touch (Join-Path $P.Stage 'Library\bin\rviz.exe') } }
         'finalize payload' { Touch (Join-Path $P.Out 'payload-files.tsv'); Remove-Item -LiteralPath (Join-Path $P.Stage 'conda-meta') -Recurse -Force }
@@ -261,7 +263,7 @@ $expected = @('download https://github.com/mamba-org/micromamba-releases/release
     'dotnet tool install wix', 'wix extension add',
     'git clone', 'git rev-parse', 'patch check 0001-windows-msvc-relocatable.patch', 'patch 0001-windows-msvc-relocatable.patch',
     'micromamba create (tools env)', 'micromamba create (rviz env)', 'micromamba env export', 'environment check',
-    'batch', 'CMake configure', 'compile', 'install', 'conda-pack', 'finalize payload', 'compileall', 'MSI assets',
+    'batch', 'CMake configure', 'compile', 'install', 'conda-pack', 'unpack stage', 'finalize payload', 'compileall', 'MSI assets',
     'batch', 'batch', 'batch', 'wix build', 'ICE validation (use -SkipValidate to bypass)')
 Assert (($order -join '|') -eq ($expected -join '|')) "step order + commands ($($order.Count) calls)"
 if (($order -join '|') -ne ($expected -join '|')) { $order | ForEach-Object { Write-Host "     $_" } }
@@ -272,7 +274,8 @@ Assert ($all -match "micromamba create \(rviz env\) :: micromamba.exe create -y 
 Assert ($all -match 'CMake configure :: cmake.exe .*-G Ninja --compile-no-warning-as-error -DCMAKE_BUILD_TYPE=Release') 'CMake: Ninja, Release'
 Assert ($all -match '-DCATKIN_BUILD_BINARY_PACKAGE=1' -and $all -match '-DRVIZ_BUILD_PYTHON_BINDINGS=ON') 'CMake: catkin binary package, python bindings ON'
 Assert ($all -match 'compile :: cmake.exe --build \S+ --parallel 8') 'compile uses all cores'
-Assert ($all -match 'conda-pack :: python.exe -c import sys; from conda_pack.cli import main; sys.exit\(main\(\)\) -p \S+ -o \S+ --format no-archive --dest-prefix C:\\opt\\rviz\\noetic') 'conda-pack (via the tools python) relocates to install prefix'
+Assert ($all -match 'conda-pack :: python.exe -X faulthandler -c import sys; from conda_pack.cli import main; sys.exit\(main\(\)\) -p \S+ -o \S+rviz-env.tar --format tar --dest-prefix C:\\opt\\rviz\\noetic') 'conda-pack (via the tools python) packs a tar relocated to the install prefix'
+Assert ($all -match 'unpack stage :: tar.exe -xf \S+rviz-env.tar -C \S+stage') 'archive unpacked into the stage'
 Assert ($all -match 'finalize payload :: python.exe \S+rvizmsi.py finalize .*--prefix C:\\opt\\rviz\\noetic .*--keep-pdb 0') 'finalize invoked with prefix'
 Assert ($all -match 'wix build :: wix.exe build @') 'wix build uses response file'
 Assert (-not ($all -match 'UNVERIFIED')) 'every download is checksum-verified'
@@ -293,7 +296,7 @@ Write-Host 'resume / invalidation'
 $rc = Run @{ BuildNumber = 3 }
 Assert ($rc -eq 0 -and ((Get-StepOrder) -join '|') -eq 'wix build|ICE validation (use -SkipValidate to bypass)') 'unchanged inputs: only the MSI is rebuilt'
 $rc = Run @{ FromStep = 'pack' }
-Assert (((Get-StepOrder) -join '|') -match '^conda-pack\|finalize payload\|compileall\|MSI assets\|batch\|batch\|batch\|wix build') '-FromStep pack reruns pack and later steps'
+Assert (((Get-StepOrder) -join '|') -match '^conda-pack\|unpack stage\|finalize payload\|compileall\|MSI assets\|batch\|batch\|batch\|wix build') '-FromStep pack reruns pack and later steps'
 $rc = Run @{ ExtraPackages = @('ros-noetic-rviz-imu-plugin') }
 Assert (((Get-StepOrder)[0..1] -join '|') -eq 'micromamba create (rviz env)|micromamba env export') 'extra package re-solves the environment...'
 Assert ((Get-StepOrder) -contains 'CMake configure' -and (Get-StepOrder) -contains 'wix build') '...and rebuilds everything after it'
@@ -309,7 +312,7 @@ Assert (-not ((Get-StepOrder) -match 'ICE validation')) '-SkipValidate skips ICE
 Write-Host 'finalize / icon / pfx'
 $icon = Join-Path $tmp 'my.ico'; Set-Content -LiteralPath $icon -Value 'x'
 $rc = Run @{ ExtraPackages = @('ros-noetic-rviz-imu-plugin'); NoPythonBindings = [switch]$true; IconFile = $icon }
-Assert (((Get-StepOrder)[0..1] -join '|') -eq 'conda-pack|finalize payload') 'finalize re-run re-packs a pristine stage first'
+Assert (((Get-StepOrder)[0..2] -join '|') -eq 'conda-pack|unpack stage|finalize payload') 'finalize re-run re-packs a pristine stage first'
 Assert (($script:calls -join ' ') -match ('--icon ' + [regex]::Escape($icon))) 'custom icon passed to assets'
 $env:SIGN_PFX_PASSWORD = 'pfx-s3cret'
 $rc = Run @{ ExtraPackages = @('ros-noetic-rviz-imu-plugin'); NoPythonBindings = [switch]$true; IconFile = $icon; SignPfx = (Join-Path $tmp 'c.pfx') }
@@ -329,6 +332,10 @@ $script:incompletePack = $true
 $rc = Run @{ FromStep = 'pack' }
 Assert ($rc -eq 1 -and -not ((Get-StepOrder) -contains 'finalize payload')) 'incomplete conda-pack stage (exit 0) stops the build'
 $script:incompletePack = $false
+$script:noArchive = $true
+$rc = Run @{ FromStep = 'pack' }
+Assert ($rc -eq 1 -and -not ((Get-StepOrder) -contains 'unpack stage')) 'conda-pack exit 0 without an archive stops the build'
+$script:noArchive = $false
 $script:failOn = 'compile'
 $rc = Run @{ Clean = [switch]$true }
 $script:failOn = $null

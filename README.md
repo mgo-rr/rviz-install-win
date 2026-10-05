@@ -30,7 +30,7 @@ layer is involved:
 | 2 | source | `git clone --branch 1.14.26`, checks the pinned commit, applies `patches\1.14.26\*.patch` |
 | 3 | env | One conda env from **RoboStack** (`robostack-noetic`) + `conda-forge` with strict channel priority, holding rviz's build + runtime dependencies. Writes `conda-lock-win-64.txt` |
 | 4 | build | Conda activation + `vcvars64`, then CMake/Ninja with the flags RoboStack uses for ROS 1 on Windows; rviz is installed into `<env>\Library` |
-| 5 | pack | `conda-pack --dest-prefix C:\opt\rviz\noetic` copies the env and rewrites every recorded prefix to the final install path |
+| 5 | pack | `conda-pack --format tar --dest-prefix C:\opt\rviz\noetic` packs the env, rewriting every recorded prefix to the final install path; the archive is unpacked into `stage\` |
 | 6 | finalize | Third-party notices + license texts, strips build-only packages, prunes headers/import libs/docs, **checks the ROS package + DLL dependency closure**, writes launchers, precompiles `.pyc`, builds the icon + license RTF |
 | 7 | smoke | Runs the staged `rviz.exe --help` (loads Qt, ROS, Boost DLLs) and `rospack find/plugins rviz` |
 | 8 | msi | `wix build` with `<Files>` harvesting, ICE validation, optional Authenticode signing, SHA-256, size check (< 2 GB) |

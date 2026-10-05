@@ -765,19 +765,31 @@ function Invoke-BuildStep($Ctx) {
 function Invoke-PackStep($Ctx) {
     $P = $Ctx.Paths
     if (Test-Path -LiteralPath $P.Stage) { Remove-Item -LiteralPath $P.Stage -Recurse -Force }
-    # Run conda-pack through the tools Python rather than the Scripts\conda-pack.exe
-    # launcher, so its real exit code and any traceback reach us: in CI the
-    # launcher once returned 0 with the stage only ~14% written. --quiet drops the
-    # carriage-return progress bar, which only bloats the log.
+    $packDir = Join-Path $P.Work 'pack'
+    $tarball = Join-Path $packDir 'rviz-env.tar'
+    if (Test-Path -LiteralPath $packDir) { Remove-Item -LiteralPath $packDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $packDir, $P.Stage | Out-Null
+    # conda-pack's no-archive format hardlinks files into the output folder, and
+    # in CI it twice stopped after ~10k of the environment's files with exit code
+    # 0 and no message (stage without conda-meta). Pack to an uncompressed tar
+    # instead: conda-pack only moves the archive into place after every file was
+    # written, so a missing archive means conda-pack itself failed. The tools
+    # Python runs it directly (no Scripts\conda-pack.exe launcher), with
+    # faulthandler on so a native crash prints a stack trace.
     Invoke-Native -FilePath $P.ToolsPy -What 'conda-pack' -ArgumentList @(
-        '-c', 'import sys; from conda_pack.cli import main; sys.exit(main())',
-        '-p', $P.Env, '-o', $P.Stage, '--format', 'no-archive', '--dest-prefix', $Ctx.Config.InstallPrefix,
+        '-X', 'faulthandler', '-c', 'import sys; from conda_pack.cli import main; sys.exit(main())',
+        '-p', $P.Env, '-o', $tarball, '--format', 'tar', '--dest-prefix', $Ctx.Config.InstallPrefix,
         '--ignore-missing-files', '--force', '--quiet')
-    # Never trust a zero exit code alone: the stage must be complete.
+    if (-not (Test-Path -LiteralPath $tarball)) { throw "conda-pack reported success but wrote no archive ($tarball)" }
+    Write-Info ("packed archive: {0:N0} MB" -f ((Get-Item -LiteralPath $tarball).Length / 1MB))
+    Invoke-Native -FilePath "$env:SystemRoot\System32\tar.exe" -What 'unpack stage' -ArgumentList @(
+        '-xf', $tarball, '-C', $P.Stage)
+    Remove-Item -LiteralPath $packDir -Recurse -Force
+    # Never trust exit codes alone: the stage must be complete.
     foreach ($rel in 'conda-meta', 'python.exe', 'Library\bin\rviz.exe') {
         if (-not (Test-Path -LiteralPath (Join-Path $P.Stage $rel))) {
             $n = @(Get-ChildItem -LiteralPath $P.Stage -Recurse -File -ErrorAction SilentlyContinue).Count
-            throw "conda-pack left an incomplete stage ($rel missing, $n files in $($P.Stage))"
+            throw "packing left an incomplete stage ($rel missing, $n files in $($P.Stage))"
         }
     }
     $metaCount = @(Get-ChildItem -LiteralPath (Join-Path $P.Stage 'conda-meta') -Filter '*.json').Count
