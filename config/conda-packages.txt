@@ -56,6 +56,9 @@ urdfdom_headers
 libboost-devel
 
 # --- Build tools (stripped from the payload) ---------------------------------
+# Noetic's message generators (genmsg/gencpp/genpy) use the empy 3 API; empy 4
+# removed it ("module 'em' has no attribute 'RAW_OPT'"), so pin below 4.
+empy >=3.3,<4
 cmake >=3.24,<4
 ninja
 pkg-config
