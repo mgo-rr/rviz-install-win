@@ -281,3 +281,20 @@ def test_pe_imports_matches_pefile():
         pe.parse_data_directories(directories=[1, 13])
         assert rvizmsi.pe_imports(f) == [e.dll.decode() for e in getattr(pe, "DIRECTORY_ENTRY_IMPORT", [])], f
         assert rvizmsi.pe_imports(f, delay=True) == [e.dll.decode() for e in getattr(pe, "DIRECTORY_ENTRY_DELAY_IMPORT", [])], f
+
+
+def test_rviz_launcher_auto_roscore(tmp_path):
+    rvizmsi.write_launchers(tmp_path, r"C:\opt\rviz\noetic")
+    cmd = (tmp_path / "launchers" / "rviz.cmd").read_bytes()
+    assert b"\r\n" in cmd and b"\n" not in cmd.replace(b"\r\n", b"")      # CRLF only
+    text = cmd.decode("ascii")
+    # only the local default master is auto-started; remote masters are left alone
+    assert 'if /i "%U%"=="http://localhost:11311" goto local_master' in text
+    assert 'if "%RVIZ_AUTO_ROSCORE%"=="0" goto run' in text
+    assert 'start "roscore (started by RViz)" /min' in text
+    assert "rosgraph.is_master_online()" in text
+    # it only stops a roscore it started itself
+    assert "if not defined RVIZ_STARTED_ROSCORE exit /b %RC%" in text
+    assert "taskkill /T /F /PID %RPID%" in text
+    # no `timeout` (fails without a console); ping is used to wait
+    assert "timeout /t" not in text and "ping -n 2 127.0.0.1" in text

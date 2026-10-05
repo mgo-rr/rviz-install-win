@@ -593,10 +593,74 @@ exit /b 0
 """
 
 RVIZ_CMD = r"""@echo off
+rem ---------------------------------------------------------------------------
+rem rviz.cmd - start RViz with the bundled ROS environment (Start menu > RViz).
+rem If ROS_MASTER_URI is the local default and no master is running, a roscore
+rem is started in a minimized window first and stopped again when RViz exits.
+rem A remote master (a robot) is never touched: RViz just connects to it.
+rem   RVIZ_AUTO_ROSCORE=0   never start a local roscore
+rem   RVIZ_KEEP_ROSCORE=1   leave the auto-started roscore running after RViz
+rem (goto, not blocks, so that arguments containing parentheses survive.)
+rem ---------------------------------------------------------------------------
 setlocal
 call "%~dp0ros_env.bat" || exit /b 1
+set "RVIZ_STARTED_ROSCORE="
+if /i "%~1"=="--help" goto run
+if /i "%~1"=="-h" goto run
+if "%RVIZ_AUTO_ROSCORE%"=="0" goto run
+set "U=%ROS_MASTER_URI%"
+if "%U:~-1%"=="/" set "U=%U:~0,-1%"
+if /i "%U%"=="http://localhost:11311" goto local_master
+if /i "%U%"=="http://127.0.0.1:11311" goto local_master
+goto run
+:local_master
+call :master_online
+if not errorlevel 1 goto run
+echo [rviz] no ROS master at %ROS_MASTER_URI% - starting roscore (minimized window)
+start "roscore (started by RViz)" /min "%ComSpec%" /d /c ""%~dp0roscore.cmd""
+set "RVIZ_STARTED_ROSCORE=1"
+set /a N=0
+:wait_master
+call :master_online
+if not errorlevel 1 goto master_up
+set /a N+=1
+if %N% geq 60 goto master_late
+ping -n 2 127.0.0.1 >nul
+goto wait_master
+:master_late
+echo [rviz] roscore is not up after 60 s; starting RViz anyway (it waits for the master) 1>&2
+goto run
+:master_up
+echo [rviz] roscore is up
+:run
+if "%RVIZ_LAUNCHER_DRYRUN%"=="1" goto dry_run
 "%RVIZ_ROOT%\Library\bin\rviz.exe" %*
+set "RC=%ERRORLEVEL%"
+goto finish
+:dry_run
+echo [rviz] dry run: rviz.exe not started
+set "RC=0"
+:finish
+if not defined RVIZ_STARTED_ROSCORE exit /b %RC%
+if "%RVIZ_KEEP_ROSCORE%"=="1" exit /b %RC%
+call :stop_roscore
+exit /b %RC%
+
+:master_online
+"%RVIZ_ROOT%\python.exe" -c "import sys, rosgraph; sys.exit(0 if rosgraph.is_master_online() else 1)" >nul 2>&1
 exit /b %ERRORLEVEL%
+
+:stop_roscore
+rem roslaunch writes its PID to <ROS_HOME>\roscore-11311.pid; this launch just
+rem (re)wrote it, so it is ours. /T also ends rosmaster and rosout.
+set "RH=%ROS_HOME%"
+if not defined RH set "RH=%USERPROFILE%\.ros"
+if not exist "%RH%\roscore-11311.pid" exit /b 0
+set /p RPID=<"%RH%\roscore-11311.pid"
+echo [rviz] stopping the roscore it started (PID %RPID%)
+taskkill /T /F /PID %RPID% >nul 2>&1
+del "%RH%\roscore-11311.pid" >nul 2>&1
+exit /b 0
 """
 
 TOOL_SHIM = r"""@echo off

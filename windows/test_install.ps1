@@ -133,8 +133,26 @@ try {
   finally {
     foreach ($p in $procs) { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null }
     Get-Process -Name rviz, rosmaster, rosout -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Prefix\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2                                 # release file locks before uninstall
   }
+
+  # ---- Start menu path: rviz.cmd must bring up its own roscore when none runs ----
+  # (dry run: everything rviz.cmd does except opening the rviz window)
+  Write-Host '[test-install] rviz.cmd auto-starts and stops roscore (launcher dry run)'
+  Check (-not ((Invoke-Batch "call `"$launchers\rosnode.cmd`" list") -match '/rosout')) 'a ROS master is still running before the launcher test'
+  $env:RVIZ_LAUNCHER_DRYRUN = '1'
+  try { $launch = Invoke-Batch "call `"$launchers\rviz.cmd`"" }
+  finally { Remove-Item env:RVIZ_LAUNCHER_DRYRUN -ErrorAction SilentlyContinue }
+  $launch | Set-Content "$LogDir\rviz-launcher.txt"
+  if (-not ($launch -match 'roscore is up')) { Write-Host $launch }
+  Check ($launch -match 'starting roscore' -and $launch -match 'roscore is up') 'rviz.cmd did not start a local roscore (see rviz-launcher.txt)'
+  Check ($launch -match 'dry run: rviz.exe not started') 'rviz.cmd did not reach the rviz.exe step'
+  Check ($launch -match 'stopping the roscore it started') 'rviz.cmd did not stop the roscore it started'
+  Start-Sleep -Seconds 3
+  Check (-not ((Invoke-Batch "call `"$launchers\rosnode.cmd`" list") -match '/rosout')) 'roscore started by rviz.cmd is still running after it exited'
+  # never leave bundled processes behind (they would lock files during uninstall)
+  Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Prefix\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
 
   $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
   Check ($machinePath -like "*$launchers*") 'launchers folder was not added to the system PATH'
