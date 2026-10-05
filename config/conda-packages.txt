@@ -44,6 +44,10 @@ ros-noetic-rosparam
 # publish image_raw/compressed); pulls in OpenCV
 ros-noetic-compressed-image-transport
 
+# RoboStack's current Noetic builds are for Python 3.12. Pinning it makes the
+# solve fail loudly instead of silently falling back to older builds.
+python 3.12.*
+
 # --- System libraries (pinned to what RoboStack Noetic builds against) --------
 ogre >=1.10.12,<1.11
 qt-main 5.15.*
@@ -54,13 +58,13 @@ tinyxml2
 urdfdom
 urdfdom_headers
 libboost-devel
-# Keep the payload lean (both are pulled in indirectly, rviz uses neither):
+# Keep the payload lean (pulled in indirectly; rviz does not use it):
 # numpy defaults to Intel MKL as BLAS on Windows (~540 MiB of DLLs); OpenBLAS
 # does the same job in a fraction of the size.
 libblas=*=*openblas
-# cv_bridge -> OpenCV; the default build carries a Qt 6 GUI (~220 MiB, next to
-# the Qt 5 rviz uses). The headless build has the same imgcodecs/imgproc.
-libopencv=*=headless*
+# Not pinned: libopencv=*=headless* (drops OpenCV's Qt 6 GUI, ~220 MiB). No
+# headless build matches RoboStack's current cv_bridge, so the solver fell back
+# to an older RoboStack build set on Python 3.11 (CI run 13).
 
 # --- Build tools (stripped from the payload) ---------------------------------
 # Noetic's message generators (genmsg/gencpp/genpy) use the empy 3 API; empy 4
