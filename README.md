@@ -342,6 +342,10 @@ pipeline** with every external tool replaced by a recorder:
 
 ## Notes & licensing
 
+* **This repository** (build scripts, WiX source, tests, docs) is licensed
+  under the [BSD 3-Clause License](LICENSE), the same license as RViz. The
+  rviz patch in `patches\` is derived from RoboStack's (BSD-3-Clause). The
+  software inside the MSI keeps its own licenses (see below).
 * **ROS 1 Noetic reached end-of-life in May 2025.** RoboStack still publishes
   win-64 Noetic packages (rviz 1.14.26 built March 2026), but there are no
   upstream security fixes. For new deployments, consider RViz2 (ROS 2).
