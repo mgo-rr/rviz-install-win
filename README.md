@@ -27,8 +27,8 @@ Most users only need the finished installer:
 
 Releases are published by CI from version tags (see
 [Publishing a release](#publishing-a-release)); every MSI there passed the
-full build and the install / run / uninstall test. The repository is private
-for now, so the download needs a GitHub account with access to it.
+full build and the install / run / uninstall test. No GitHub account is
+needed to download.
 
 > **Status:** CI builds the MSI end to end on a GitHub-hosted Windows runner
 > and test-installs it (install, rviz `--help`, rospack, rospy, roscore,
@@ -282,7 +282,7 @@ Work dir (`C:\rvb`): `tools\` (micromamba, dotnet, wix), `mamba\pkgs`
     runs.
   * `release` (version tags only): publishes the tested MSI as a GitHub
     Release.
-  * Windows minutes count double on private repositories.
+  * Actions minutes on GitHub-hosted runners are free for public repositories (on private ones, Windows minutes count double).
 
 ### Publishing a release
 
