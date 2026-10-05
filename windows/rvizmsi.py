@@ -81,9 +81,11 @@ DLL_ROOTS = [
     "Library/plugins/imageformats/*.dll", "Library/bin/*image_transport*.dll",
 ]
 # Directories searched for a DLL besides the importing binary's own folder,
-# in the same order as the PATH set by launchers/ros_env.bat.
+# in the same order as the PATH set by launchers/ros_env.bat. Library/lib is
+# there because some ROS packages (e.g. image_transport) install their DLLs with
+# a plain `DESTINATION lib`, which on Windows puts them next to the .lib files.
 DLL_SEARCH_DIRS = ["", "Library/mingw-w64/bin", "Library/usr/bin", "Library/bin",
-                   "Scripts", "bin", "DLLs"]
+                   "Scripts", "bin", "DLLs", "Library/lib"]
 
 # ROS command-line tools that get a thin launcher in <prefix>\launchers\.
 ROS_TOOLS = [
@@ -195,10 +197,13 @@ def cmd_check_env(a) -> None:
 # --------------------------------------------------------------------------- #
 # finalize
 # --------------------------------------------------------------------------- #
-def find_extracted_dir(pkg: dict, pkgs_dirs: list[Path]) -> Path | None:
-    cand = pkg.get("extracted_package_dir")
-    if cand and Path(cand).is_dir():
-        return Path(cand)
+def find_extracted_dir(pkg: dict, pkgs_dirs: list[Path], env_meta: dict | None = None) -> Path | None:
+    # conda-pack blanks extracted_package_dir in the packed conda-meta, so also
+    # look it up in the build environment's own metadata.
+    for meta in (pkg, (env_meta or {}).get(pkg["name"], {})):
+        cand = meta.get("extracted_package_dir")
+        if cand and Path(cand).is_dir():
+            return Path(cand)
     stem = f"{pkg['name']}-{pkg['version']}-{pkg.get('build', '')}"
     for d in pkgs_dirs:
         if (d / stem).is_dir():
@@ -206,7 +211,7 @@ def find_extracted_dir(pkg: dict, pkgs_dirs: list[Path]) -> Path | None:
     return None
 
 
-def collect_licenses(stage: Path, pkgs: dict, pkgs_dirs: list[Path]) -> None:
+def collect_licenses(stage: Path, pkgs: dict, pkgs_dirs: list[Path], env_meta: dict | None = None) -> None:
     lic_root = stage / "licenses"
     lic_root.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -225,10 +230,14 @@ def collect_licenses(stage: Path, pkgs: dict, pkgs_dirs: list[Path]) -> None:
         p = pkgs[name]
         lines.append(f"{name:<45} {p.get('version', '?'):<22} "
                      f"{p.get('license', 'UNKNOWN')}")
-        src = find_extracted_dir(p, pkgs_dirs)
+        src = find_extracted_dir(p, pkgs_dirs, env_meta)
         lic_dir = src / "info" / "licenses" if src else None
         if lic_dir and lic_dir.is_dir():
             shutil.copytree(lic_dir, lic_root / name, dirs_exist_ok=True)
+        elif src and list((src / "info").glob("LICENSE*")):
+            (lic_root / name).mkdir(parents=True, exist_ok=True)
+            for f in (src / "info").glob("LICENSE*"):
+                shutil.copy2(f, lic_root / name / f.name)
         else:
             without.append(name)
     lines += ["", "RViz itself is BSD-3-Clause licensed (see licenses/rviz)."]
@@ -238,6 +247,9 @@ def collect_licenses(stage: Path, pkgs: dict, pkgs_dirs: list[Path]) -> None:
     if without:
         log("no license files in package cache for: " + ", ".join(without[:20])
             + (" ..." if len(without) > 20 else ""))
+        for d in pkgs_dirs:
+            n = sum(1 for x in d.iterdir() if x.is_dir()) if d.is_dir() else 0
+            log(f"  package cache {d}: {'missing' if not d.is_dir() else f'{n} extracted packages'}")
 
 
 def strip_build_only(stage: Path, pkgs: dict, names: list[str]) -> set[str]:
@@ -349,9 +361,12 @@ def is_system_dep(name: str) -> bool:
     return name in SYSTEM_DEPS or name.startswith(SYSTEM_DEP_PREFIXES)
 
 
-def check_ros_packages(stage: Path) -> list[str]:
+def check_ros_packages(stage: Path, conda_names: set[str] | None = None) -> list[str]:
     """Return problems: missing required ROS packages, and ROS run-dependencies
-    (followed transitively from rviz and the core tools) that are absent."""
+    (followed transitively from rviz and the core tools) that are absent.
+    A dependency that names an installed conda package (rosdep keys such as
+    apr or log4cxx map 1:1 onto conda-forge packages) counts as satisfied."""
+    conda_names = conda_names or set()
     share = stage / "Library" / "share"
     installed = {p.parent.name for p in share.glob("*/package.xml")}
     problems = [f"ROS package '{p}' is not in the payload"
@@ -365,7 +380,7 @@ def check_ros_packages(stage: Path) -> list[str]:
         for dep in sorted(ros_run_deps(share / pkg / "package.xml")):
             if dep in installed:
                 queue.append(dep)
-            elif not is_system_dep(dep):
+            elif not (is_system_dep(dep) or dep in conda_names):
                 problems.append(f"'{pkg}' needs ROS package '{dep}', which is not in the payload")
     log(f"ROS packages: {len(installed)} installed, {len(seen)} in rviz/roscore closure")
     return sorted(set(problems))
@@ -482,12 +497,19 @@ def check_dll_closure(stage: Path, system_dirs: list[Path] | None = None,
             elif _system_dll(name, system_dirs) or (not system_dirs and name.lower() in KNOWN_SYSTEM_DLLS):
                 continue
             else:
-                problems.append(f"{binary.relative_to(stage).as_posix()} needs {name}, which is not in the payload or Windows")
+                elsewhere = sorted(stage.rglob(name))
+                hint = (f" (it is at {elsewhere[0].relative_to(stage).as_posix()}, which is not on the DLL search path)"
+                        if elsewhere else "")
+                problems.append(f"{binary.relative_to(stage).as_posix()} needs {name}, which is not in the payload or Windows{hint}")
     return sorted(set(problems)), len(seen)
 
 
-def verify_runtime(stage: Path) -> None:
-    problems = check_ros_packages(stage)
+def verify_runtime(stage: Path, conda_names: set[str] | None = None) -> None:
+    if conda_names is None:
+        listing = stage / "share" / "rviz-msi" / "packages.txt"
+        conda_names = ({ln.split("=", 1)[0] for ln in listing.read_text(encoding="utf-8").splitlines() if ln}
+                       if listing.is_file() else set())
+    problems = check_ros_packages(stage, conda_names)
     dll_problems, checked = check_dll_closure(stage)
     log(f"DLL closure: {checked} binaries checked from {len(DLL_ROOTS)} root patterns")
     problems += dll_problems
@@ -509,7 +531,7 @@ rem for smoke tests even though the MSI installs to a fixed prefix.
 rem ---------------------------------------------------------------------------
 for %%I in ("%~dp0..") do set "RVIZ_ROOT=%%~fI"
 if /i "%RVIZ_ENV_ACTIVE%"=="%RVIZ_ROOT%" goto :ros_vars
-set "PATH=%RVIZ_ROOT%;%RVIZ_ROOT%\Library\mingw-w64\bin;%RVIZ_ROOT%\Library\usr\bin;%RVIZ_ROOT%\Library\bin;%RVIZ_ROOT%\Scripts;%RVIZ_ROOT%\bin;%RVIZ_ROOT%\launchers;%PATH%"
+set "PATH=%RVIZ_ROOT%;%RVIZ_ROOT%\Library\mingw-w64\bin;%RVIZ_ROOT%\Library\usr\bin;%RVIZ_ROOT%\Library\bin;%RVIZ_ROOT%\Scripts;%RVIZ_ROOT%\bin;%RVIZ_ROOT%\DLLs;%RVIZ_ROOT%\Library\lib;%RVIZ_ROOT%\launchers;%PATH%"
 set "RVIZ_ENV_ACTIVE=%RVIZ_ROOT%"
 set "CONDA_PREFIX=%RVIZ_ROOT%"
 rem Run package activation hooks exactly like 'conda activate' would.
@@ -627,8 +649,9 @@ def cmd_finalize(a) -> None:
         die(f"stage dir not found: {stage}")
     pkgs = load_conda_meta(stage)
     pkgs_dirs = [Path(p) for p in a.pkgs_dir]
+    env_meta = load_conda_meta(Path(a.env_prefix)) if a.env_prefix else {}
 
-    collect_licenses(stage, pkgs, pkgs_dirs)
+    collect_licenses(stage, pkgs, pkgs_dirs, env_meta)
     rviz_lic = Path(a.rviz_src) / "LICENSE"
     if rviz_lic.is_file():
         (stage / "licenses" / "rviz").mkdir(parents=True, exist_ok=True)
@@ -646,7 +669,7 @@ def cmd_finalize(a) -> None:
 
     prune(stage, read_list(cfg / "prune.txt"), keep_pdb=bool(a.keep_pdb))
     verify_required(stage)
-    verify_runtime(stage)
+    verify_runtime(stage, set(pkgs))
     write_launchers(stage, a.prefix)
     count, size = write_manifest(stage, kept, Path(a.report_dir))
     log(f"payload: {count} files, {size / 2**20:.0f} MiB uncompressed")
@@ -749,6 +772,7 @@ def main(argv=None) -> None:
     p.add_argument("--rviz-src", required=True)
     p.add_argument("--prefix", required=True, help="final install prefix")
     p.add_argument("--pkgs-dir", action="append", default=[])
+    p.add_argument("--env-prefix", help="build environment (for its unpacked conda-meta)")
     p.add_argument("--report-dir", required=True)
     p.add_argument("--keep-pdb", type=int, default=0)
     p.set_defaults(func=cmd_finalize)

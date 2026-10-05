@@ -190,6 +190,12 @@ def test_ros_package_closure(tmp_path):
     assert rvizmsi.check_ros_packages(tmp_path) == []
     (share / "rosmaster" / "package.xml").unlink()
     assert "ROS package 'rosmaster' is not in the payload" in rvizmsi.check_ros_packages(tmp_path)
+    # rosdep keys that are conda packages (apr, log4cxx) are satisfied by them
+    write_pkg(share, "rosmaster")
+    write_pkg(share, "rosconsole", deps=["apr", "log4cxx"])
+    write_pkg(share, "rviz", deps=["roscpp", "rosconsole"])
+    assert len(rvizmsi.check_ros_packages(tmp_path)) == 2
+    assert rvizmsi.check_ros_packages(tmp_path, {"apr", "log4cxx"}) == []
 
 
 def test_dll_closure(tmp_path):
@@ -213,6 +219,36 @@ def test_dll_closure(tmp_path):
     graph["OgreMain.dll"] = ["vcruntime140.dll", "zlib.dll"]      # missing transitive DLL
     probs, _ = rvizmsi.check_dll_closure(st, system_dirs=[sysdir], imports=imports)
     assert probs == ["Library/bin/OgreMain.dll needs zlib.dll, which is not in the payload or Windows"]
+    # DLLs installed to Library/lib (plain `DESTINATION lib`) are on the search path
+    graph["OgreMain.dll"] = ["vcruntime140.dll", "image_transport.dll"]
+    graph["image_transport.dll"] = []
+    (st / "Library/lib").mkdir(parents=True, exist_ok=True)
+    (st / "Library/lib/image_transport.dll").write_bytes(b"MZ")
+    probs, _ = rvizmsi.check_dll_closure(st, system_dirs=[sysdir], imports=imports)
+    assert probs == []
+    # a DLL elsewhere in the payload is reported with where it was found
+    (st / "Library/share").mkdir(parents=True, exist_ok=True)
+    (st / "Library/lib/image_transport.dll").rename(st / "Library/share/image_transport.dll")
+    probs, _ = rvizmsi.check_dll_closure(st, system_dirs=[sysdir], imports=imports)
+    assert probs == ["Library/bin/OgreMain.dll needs image_transport.dll, which is not in the payload or Windows"
+                     " (it is at Library/share/image_transport.dll, which is not on the DLL search path)"]
+
+
+def test_licenses_from_env_meta(tmp_path):
+    stage, env, cache = tmp_path / "stage", tmp_path / "env", tmp_path / "pkgs"
+    ext = cache / "foo-1.0-h0_0"
+    (ext / "info" / "licenses").mkdir(parents=True)
+    (ext / "info" / "licenses" / "LICENSE").write_text("MIT")
+    bar = tmp_path / "elsewhere" / "bar-2.0-x"
+    (bar / "info").mkdir(parents=True)
+    (bar / "info" / "LICENSE.txt").write_text("BSD")
+    pkgs = {"foo": {"name": "foo", "version": "1.0", "build": "h0_0", "extracted_package_dir": ""},
+            "bar": {"name": "bar", "version": "2.0", "build": "x", "extracted_package_dir": ""}}
+    env_meta = {"bar": {"name": "bar", "extracted_package_dir": str(bar)}}
+    stage.mkdir()
+    rvizmsi.collect_licenses(stage, pkgs, [cache], env_meta)
+    assert (stage / "licenses/foo/LICENSE").read_text() == "MIT"
+    assert (stage / "licenses/bar/LICENSE.txt").read_text() == "BSD"
 
 
 @pytest.mark.skipif(not os.environ.get("RVIZMSI_PE_SAMPLES"), reason="set RVIZMSI_PE_SAMPLES to a dir of Windows binaries")

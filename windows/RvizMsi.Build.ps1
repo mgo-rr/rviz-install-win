@@ -808,7 +808,7 @@ function Invoke-FinalizeStep($Ctx) {
     if (Test-Path -LiteralPath $P.Assets) { Remove-Item -LiteralPath $P.Assets -Recurse -Force }
     Invoke-Native -FilePath $P.ToolsPy -What 'finalize payload' -ArgumentList @(
         $py, 'finalize', '--stage', $P.Stage, '--config-dir', $P.Config, '--rviz-src', $P.Src,
-        '--prefix', $C.InstallPrefix, '--pkgs-dir', (Join-Path $P.MambaRoot 'pkgs'), '--report-dir', $P.Out,
+        '--prefix', $C.InstallPrefix, '--pkgs-dir', (Join-Path $P.MambaRoot 'pkgs'), '--env-prefix', $P.Env, '--report-dir', $P.Out,
         '--keep-pdb', $(if ($C.KeepPdb) { '1' } else { '0' }))
     # Pre-compile bytecode with the payload's own interpreter, embedding the final
     # install path. Some upstream files are intentionally invalid -> warning only.
