@@ -6,11 +6,13 @@ Derived from RoboStack's ros-noetic-rviz.patch
     path (no NULL dereference when CONDA_PREFIX is unset).
   * Removed Linux-only library path and debug message(WARNING) lines.
   * New CMake option RVIZ_BUILD_PYTHON_BINDINGS (default ON).
-  * Windows: drop OGRE_LIBRARIES entries that conda-forge's OGRE 1.10 does
-    not ship (OgreBites.lib -> LNK1181); rviz uses none of them.
+  * Windows: resolve bare-name OGRE_LIBRARIES entries from conda-forge's
+    OGRE 1.10 config to full paths, dropping missing ones (LNK1181 OgreBites).
+  * Link yaml-cpp through its imported target: yaml-cpp 0.8.0's config sets
+    YAML_CPP_LIBRARIES to a bare "yaml-cpp" (LNK1181 yaml-cpp.lib).
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index b1cd592..056beb1 100644
+index b1cd592..7c62956 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -1,6 +1,11 @@
@@ -30,10 +32,10 @@ index b1cd592..056beb1 100644
      set(OGRE_LIBRARIES ${OGRE_LIBRARIES} ${OGRE_Overlay_LIBRARIES})
    endif()
 +  if(WIN32)
-+    # conda-forge's OGRE 1.10 config lists components (e.g. OgreBites) in
-+    # OGRE_LIBRARIES that the package does not ship, which ends in
-+    # "LNK1181: cannot open input file 'OgreBites.lib'". rviz uses none of
-+    # them: keep imported targets, absolute paths and libraries that exist.
++    # conda-forge's OGRE 1.10 config lists some libraries (e.g. OgreBites)
++    # in OGRE_LIBRARIES as bare names that are not on the linker's search
++    # path ("LNK1181: cannot open input file 'OgreBites.lib'"): resolve bare
++    # names to full paths and drop any that are not installed.
 +    set(_rviz_ogre_libraries)
 +    foreach(_rviz_ogre_lib IN LISTS OGRE_LIBRARIES)
 +      if(TARGET "${_rviz_ogre_lib}" OR IS_ABSOLUTE "${_rviz_ogre_lib}"
@@ -143,6 +145,27 @@ index efbb497..899c875 100644
    endif()
    #catkin_lint: ignore_once external_file
    install(FILES ${CATKIN_DEVEL_PREFIX}/${PYTHON_INSTALL_DIR}/rviz/${rviz_sip_LIBRARY_FILE}
+diff --git a/src/rviz/CMakeLists.txt b/src/rviz/CMakeLists.txt
+index 614274c..5467efc 100644
+--- a/src/rviz/CMakeLists.txt
++++ b/src/rviz/CMakeLists.txt
+@@ -1,4 +1,16 @@
+ find_package(yaml-cpp REQUIRED)
++# yaml-cpp 0.8.0's config sets YAML_CPP_LIBRARIES to the bare name "yaml-cpp"
++# while it exports the target as yaml-cpp::yaml-cpp, so MSVC is asked for a
++# yaml-cpp.lib it cannot find (LNK1181). Link the imported target instead,
++# made global so targets in sibling directories (image_view) that link librviz
++# can resolve it too.
++if(TARGET yaml-cpp::yaml-cpp)
++  get_target_property(_rviz_yaml_aliased yaml-cpp::yaml-cpp ALIASED_TARGET)
++  if(NOT _rviz_yaml_aliased)
++    set_target_properties(yaml-cpp::yaml-cpp PROPERTIES IMPORTED_GLOBAL TRUE)
++  endif()
++  set(YAML_CPP_LIBRARIES yaml-cpp::yaml-cpp)
++endif()
+ 
+ include_directories(${YAML_CPP_INCLUDE_DIR})
+ 
 diff --git a/src/rviz/ogre_helpers/render_system.cpp b/src/rviz/ogre_helpers/render_system.cpp
 index 4005f98..1c02157 100644
 --- a/src/rviz/ogre_helpers/render_system.cpp
