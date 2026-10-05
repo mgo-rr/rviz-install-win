@@ -354,7 +354,7 @@ function Test-IsAdmin {
     return (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# Git for Windows (Git Bash) - RoboCare teams already have it for SSH to robots.
+# Git for Windows (Git Bash) - the Relay Robotics Robo Care Team already has it for SSH to robots.
 function Find-GitForWindows {
     $roots = New-Object System.Collections.Generic.List[string]
     foreach ($hive in 'HKLM:\SOFTWARE\GitForWindows', 'HKCU:\SOFTWARE\GitForWindows') {

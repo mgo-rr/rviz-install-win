@@ -18,10 +18,17 @@ name: CI
 # Every log, the MSI, its checksum and the conda lock file are uploaded as
 # artifacts, including from failed runs, so a failure can be diagnosed without
 # re-running it.
+#
+#   release only for version tags (v*): attaches the tested MSI, its SHA-256
+#           and the lock file to a GitHub Release, which then shows in the
+#           repository's "Releases" sidebar and at /releases/latest.
 
 on:
   push:
     branches: [main]
+    # A version tag (e.g. v1.14.26-1) runs the full build and, if it passes,
+    # publishes the MSI as a GitHub Release (see the `release` job).
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
     inputs:
@@ -146,3 +153,37 @@ jobs:
             C:\rvb\out\conda-lock-win-64.txt
             C:\rvb\out\payload-files.tsv
           if-no-files-found: warn
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest          # just uploads files; Linux minutes are 1x
+    timeout-minutes: 20
+    permissions:
+      contents: write               # create the release (this job only)
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: rviz-msi
+          path: dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l dist
+          msi=$(ls dist/*.msi)
+          sha=$(cut -d' ' -f1 "$msi.sha256")
+          cat > notes.md <<EOF
+          RViz 1.14.26 (ROS Noetic) for Windows 10/11 x64, with a private ROS Noetic runtime.
+
+          **Install:** download \`$(basename "$msi")\` and double-click it (administrator rights needed),
+          then open **Start menu > RViz (ROS Noetic) > RViz**.
+
+          SHA-256: \`$sha\`
+
+          Built and install-tested by CI run [${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+          EOF
+          gh release create "$TAG" dist/* --repo "${{ github.repository }}" \
+            --title "RViz Noetic installer $TAG" --notes-file notes.md --verify-tag

@@ -14,10 +14,26 @@ layer is involved:
 
 `Get-Help .\build-rviz-msi.ps1 -Full` documents every option.
 
-> **Status:** the build logic is tested with stubbed tools: a full pipeline
-> dry run, unit tests, the PowerShell linter, a WiX schema check and the patch
-> check (see [Testing](#testing)). The first real Windows build still needs to
-> be run: expect a round of fixes on the compile and WiX-validation steps.
+## Download (no build needed)
+
+Most users only need the finished installer:
+
+1. Open **[Releases](https://github.com/mgo-rr/rviz-install-win/releases/latest)**
+   (also in the *Releases* box on the right of the repository's main page).
+2. Download `RVizNoetic-<version>-x64.msi` (optionally check it against the
+   `.sha256` file next to it).
+3. Double-click the MSI (administrator rights are needed), then open
+   **Start menu > RViz (ROS Noetic) > RViz**. See [Using RViz](#using-rviz).
+
+Releases are published by CI from version tags (see
+[Publishing a release](#publishing-a-release)); every MSI there passed the
+full build and the install / run / uninstall test. The repository is private
+for now, so the download needs a GitHub account with access to it.
+
+> **Status:** CI builds the MSI end to end on a GitHub-hosted Windows runner
+> and test-installs it (install, rviz `--help`, rospack, rospy, roscore,
+> launcher auto-start, uninstall). Opening the rviz window itself needs a real
+> PC with an OpenGL driver; check that once per release.
 
 ---
 
@@ -69,7 +85,7 @@ based on RoboStack's Windows patch:
   ```
   winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
   ```
-* **Git for Windows (Git Bash)**. RoboCare engineers already have it for SSH
+* **Git for Windows (Git Bash)**. The Relay Robotics Robo Care Team already has it for SSH
   access to robots, and the script uses that install as it is. If it's
   missing, the script offers to install it (or does so silently with
   `-InstallGit`), per-user without UAC when not elevated. Only its `git.exe`
@@ -82,7 +98,7 @@ based on RoboStack's Windows patch:
 ## Quick start
 
 ```powershell
-git clone <this repo> C:\src\rviz-installer     # or download the zip
+git clone https://github.com/mgo-rr/rviz-install-win C:\src\rviz-installer     # or download the zip
 cd C:\src\rviz-installer
 .\build-rviz-msi.ps1 -CheckOnly                  # what was detected + effective config
 .\build-rviz-msi.ps1 -BuildNumber 1 -Manufacturer "Your Company"
@@ -152,6 +168,33 @@ Pinned defaults (versions, hashes, product identity, UpgradeCode) live in
 * Uninstall removes everything, including runtime `.pyc` caches, shortcuts
   and the PATH entry.
 
+## Using RViz
+
+Click **Start menu > RViz (ROS Noetic) > RViz**. That runs
+`launchers\rviz.cmd`, which sets up the bundled ROS environment and then:
+
+* **No robot configured** (`ROS_MASTER_URI` unset or
+  `http://localhost:11311`): if no ROS master is running, it starts
+  `roscore` in a minimized window titled *roscore (started by RViz)*, waits
+  until it answers, and opens RViz. When RViz is closed, that roscore is
+  stopped again. If a master is already running (e.g. from the *roscore*
+  shortcut), it is reused and left alone.
+* **Robot configured** (`ROS_MASTER_URI` points elsewhere, e.g.
+  `http://<robot-ip>:11311`): nothing is started locally; RViz connects to the
+  robot's master and waits for it if it is not reachable yet. Set
+  `ROS_IP` (or `ROS_HOSTNAME`) to this PC's address as well, so the robot can
+  reach RViz.
+
+Switches (environment variables, e.g. set once with `setx`):
+
+| Variable | Effect |
+|---|---|
+| `RVIZ_AUTO_ROSCORE=0` | never start a local roscore |
+| `RVIZ_KEEP_ROSCORE=1` | leave the auto-started roscore running after RViz closes |
+
+The other shortcuts: *roscore* starts a master on its own, *ROS Noetic Shell*
+opens a command prompt with `rostopic`, `rosnode`, `roslaunch`, ... ready.
+
 ### The bundled ROS runtime
 
 The MSI is self-contained: the target PC needs **no ROS install, no Python,
@@ -182,7 +225,7 @@ How this is verified:
 | finalize (every build) | **ROS package closure**: every ROS package rviz and roscore need is present, following package.xml run dependencies transitively |
 | finalize (every build) | **DLL closure**: starting from rviz.exe, its plugins, the OGRE and Qt plugins, rospack, rosout and python.exe, every imported DLL must be in the payload or be a Windows system DLL (pure-Python PE reader, cross-checked against `pefile` on 181 real Windows binaries) |
 | smoke (every build) | staged `rviz.exe --help` loads; `rospack` resolves rviz and its plugin manifest |
-| `-TestInstall` | after a real install: roscore starts and `/rosout` appears, `rostopic list` works, rviz starts, registers with the master, stays up and logs no plugin/OGRE errors; bundled python imports rospy; uninstall leaves nothing behind |
+| `-TestInstall` | after a real install: roscore starts and `/rosout` appears, `rostopic list` works, rviz starts, registers with the master, stays up and logs no plugin/OGRE errors; the Start-menu launcher `rviz.cmd` starts its own roscore when none runs and stops it afterwards; bundled python imports rospy; uninstall leaves nothing behind |
 
 Silent install / uninstall:
 
@@ -237,7 +280,25 @@ Work dir (`C:\rvb`): `tools\` (micromamba, dotnet, wix), `mamba\pkgs`
   * The MSI, checksum, lock file and all logs are uploaded as artifacts, the
     logs even from failed runs. The conda package cache is cached between
     runs.
+  * `release` (version tags only): publishes the tested MSI as a GitHub
+    Release.
   * Windows minutes count double on private repositories.
+
+### Publishing a release
+
+Tag a commit on `main` and push the tag:
+
+```bash
+git tag -a v1.14.26-1 -m "RViz 1.14.26 installer, build 1"
+git push origin v1.14.26-1
+```
+
+CI builds and test-installs the MSI as usual; if everything passes, the
+`release` job creates the GitHub Release `v1.14.26-1` with the MSI, its
+`.sha256`, the conda lock file and the payload file list attached. It then
+appears under *Releases* on the repository's main page and at
+`/releases/latest`. A failed build publishes nothing; delete the tag, fix,
+and tag again.
 
 ## Testing
 
