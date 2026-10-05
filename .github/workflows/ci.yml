@@ -42,7 +42,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Same tests, both editions: Windows PowerShell 5.1 is what most people
       # run the script with, and differs from 7 in native-argument passing,
@@ -65,7 +65,7 @@ jobs:
           $findings | Format-Table -AutoSize RuleName, ScriptName, Line, Message
           if ($findings) { throw "$(@($findings).Count) PSScriptAnalyzer finding(s)" }
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -99,12 +99,12 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The conda package cache is the slow part of a cold build. Keyed on the
       # package list and the toolchain pins, so a change to either starts clean.
       - name: Cache conda packages and tools
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             C:\rvb\mamba\pkgs
@@ -128,7 +128,7 @@ jobs:
 
       - name: Upload MSI
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rviz-msi
           path: dist/
@@ -136,7 +136,7 @@ jobs:
 
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-logs
           path: |
