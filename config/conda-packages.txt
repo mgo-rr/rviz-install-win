@@ -54,6 +54,13 @@ tinyxml2
 urdfdom
 urdfdom_headers
 libboost-devel
+# Keep the payload lean (both are pulled in indirectly, rviz uses neither):
+# numpy defaults to Intel MKL as BLAS on Windows (~540 MiB of DLLs); OpenBLAS
+# does the same job in a fraction of the size.
+libblas=*=*openblas
+# cv_bridge -> OpenCV; the default build carries a Qt 6 GUI (~220 MiB, next to
+# the Qt 5 rviz uses). The headless build has the same imgcodecs/imgproc.
+libopencv=*=headless*
 
 # --- Build tools (stripped from the payload) ---------------------------------
 # Noetic's message generators (genmsg/gencpp/genpy) use the empy 3 API; empy 4

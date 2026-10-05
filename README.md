@@ -33,7 +33,7 @@ layer is involved:
 | 5 | pack | `conda-pack --format tar --dest-prefix C:\opt\rviz\noetic` packs the env, rewriting every recorded prefix to the final install path; the archive is unpacked into `stage\` |
 | 6 | finalize | Third-party notices + license texts, strips build-only packages, prunes headers/import libs/docs, **checks the ROS package + DLL dependency closure**, writes launchers, precompiles `.pyc`, builds the icon + license RTF |
 | 7 | smoke | Runs the staged `rviz.exe --help` (loads Qt, ROS, Boost DLLs) and `rospack find/plugins rviz` |
-| 8 | msi | `wix build` with `<Files>` harvesting, ICE validation, optional Authenticode signing, SHA-256, size check (< 2 GB) |
+| 8 | msi | `wix build` with `<Files>` harvesting, ICE validation (ICE60/ICE61 suppressed, see `Invoke-MsiStep`), optional Authenticode signing, SHA-256, size check (< 2 GB) |
 | 9 | test-install | Optional (`-TestInstall`, elevated): silent install, start roscore + rviz from the installed copy, uninstall, verify cleanup |
 
 Steps are **resumable**. Each completed step leaves a fingerprint of its
@@ -286,8 +286,10 @@ pipeline** with every external tool replaced by a recorder:
   upstream security fixes. For new deployments, consider RViz2 (ROS 2).
 * The MSI redistributes Qt 5 (LGPL-3.0), OGRE (MIT), Boost, Python, OpenCV and
   others. `THIRD_PARTY_NOTICES.txt` and `licenses\` are generated from the
-  conda metadata and installed next to rviz. Review them before external
-  distribution.
+  conda metadata and installed next to rviz. RoboStack `ros-noetic-*`
+  packages ship no license files; they are listed with their upstream license
+  plus the RoboStack repository license (MIT, `config\licenses\`). Review
+  them before external distribution.
 * Defaults are neutral for public use: set `-Manufacturer` to your
   organisation. Forks that publish their own MSIs should also generate a new
   `UpgradeCode` in `config\build.psd1`.

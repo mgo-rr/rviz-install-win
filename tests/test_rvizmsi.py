@@ -251,6 +251,26 @@ def test_licenses_from_env_meta(tmp_path):
     assert (stage / "licenses/bar/LICENSE.txt").read_text() == "BSD"
 
 
+def test_licenses_robostack_and_metapackages(tmp_path):
+    stage, cache = tmp_path / "stage", tmp_path / "pkgs"
+    stage.mkdir()
+    (cache / "ros-noetic-roscpp-1.17.4-np2_24" / "info").mkdir(parents=True)
+    rs = tmp_path / "RoboStack-LICENSE.txt"
+    rs.write_text("MIT License (RoboStack)")
+    pkgs = {"ros-noetic-roscpp": {"name": "ros-noetic-roscpp", "version": "1.17.4", "build": "np2_24",
+                                  "license": "BSD-3-Clause", "files": ["Library/bin/roscpp.dll"],
+                                  "channel": "https://conda.anaconda.org/robostack-noetic/win-64"},
+            "vc": {"name": "vc", "version": "14.5", "build": "h0", "license": "BSD-3-Clause", "files": []},
+            "libsqlite": {"name": "libsqlite", "version": "3.5", "build": "h1", "license": "blessing",
+                          "files": ["Library/bin/sqlite3.dll"]}}
+    rvizmsi.collect_licenses(stage, pkgs, [cache], {}, robostack_license=rs)
+    assert (stage / "licenses/RoboStack-ros-noetic/LICENSE").read_text() == "MIT License (RoboStack)"
+    notices = (stage / "THIRD_PARTY_NOTICES.txt").read_text(encoding="utf-8")
+    assert "BSD-3-Clause  [packaging: RoboStack, MIT]" in notices
+    assert "(metapackage)" in notices.split("vc ")[1].splitlines()[0]
+    assert "blessing" in notices and "libsqlite" in notices
+
+
 @pytest.mark.skipif(not os.environ.get("RVIZMSI_PE_SAMPLES"), reason="set RVIZMSI_PE_SAMPLES to a dir of Windows binaries")
 def test_pe_imports_matches_pefile():
     pefile = pytest.importorskip("pefile")

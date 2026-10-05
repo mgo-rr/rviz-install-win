@@ -26,3 +26,6 @@ Library/bin/linguist.exe
 Library/bin/assistant.exe
 Library/bin/qtcreator*
 **/__pycache__
+# libclang ships with qt-main for Qt's own dev tools (qdoc, lupdate); no
+# runtime DLL imports it (the finalize DLL closure check would fail if one did).
+Library/bin/libclang*.dll

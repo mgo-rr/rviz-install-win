@@ -192,6 +192,10 @@ def cmd_check_env(a) -> None:
     log(f"environment OK: {len(pkgs)} packages, python "
         f"{pkgs['python']['version']}, ogre {pkgs['ogre']['version']}, "
         f"qt-main {pkgs['qt-main']['version']}")
+    blas = pkgs.get("libblas", {}).get("build", "-")
+    cv = pkgs.get("libopencv", {}).get("build", "-")
+    log(f"libblas build {blas}, libopencv build {cv}, mkl {'present' if 'mkl' in pkgs else 'absent'}, "
+        f"qt6-main {'present' if 'qt6-main' in pkgs else 'absent'}")
 
 
 # --------------------------------------------------------------------------- #
@@ -211,7 +215,13 @@ def find_extracted_dir(pkg: dict, pkgs_dirs: list[Path], env_meta: dict | None =
     return None
 
 
-def collect_licenses(stage: Path, pkgs: dict, pkgs_dirs: list[Path], env_meta: dict | None = None) -> None:
+def is_robostack(pkg: dict) -> bool:
+    return ("robostack" in str(pkg.get("channel", "")) or pkg["name"].startswith("ros-noetic-")
+            or pkg["name"] == "ros-distro-mutex")
+
+
+def collect_licenses(stage: Path, pkgs: dict, pkgs_dirs: list[Path], env_meta: dict | None = None,
+                     robostack_license: Path | None = None) -> None:
     lic_root = stage / "licenses"
     lic_root.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -222,15 +232,32 @@ def collect_licenses(stage: Path, pkgs: dict, pkgs_dirs: list[Path], env_meta: d
         "RoboStack). Full license texts, where provided by the package, are in",
         "the 'licenses' folder next to this file.",
         "",
+        "RoboStack packages (ros-noetic-*) ship no license files of their own. They",
+        "are covered by the RoboStack ros-noetic repository license (MIT, in",
+        "licenses/RoboStack-ros-noetic, https://github.com/RoboStack/ros-noetic);",
+        "the ROS source code inside them keeps the upstream license shown below.",
+        "Packages marked (metapackage) install no files.",
+        "",
         f"{'Package':<45} {'Version':<22} License",
         f"{'-' * 45} {'-' * 22} {'-' * 30}",
     ]
-    without = []
+    without, robostack, meta_only = [], [], []
+    if robostack_license and robostack_license.is_file():
+        (lic_root / "RoboStack-ros-noetic").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(robostack_license, lic_root / "RoboStack-ros-noetic" / "LICENSE")
+    else:
+        robostack_license = None
     for name in sorted(pkgs):
         p = pkgs[name]
-        lines.append(f"{name:<45} {p.get('version', '?'):<22} "
-                     f"{p.get('license', 'UNKNOWN')}")
+        note = ""
         src = find_extracted_dir(p, pkgs_dirs, env_meta)
+        has_own = bool(src and ((src / "info" / "licenses").is_dir() or list((src / "info").glob("LICENSE*"))))
+        if not has_own and robostack_license and is_robostack(p):
+            note = "  [packaging: RoboStack, MIT]"
+        elif not has_own and not p.get("files"):
+            note = "  (metapackage)"
+        lines.append(f"{name:<45} {p.get('version', '?'):<22} "
+                     f"{p.get('license', 'UNKNOWN')}{note}")
         lic_dir = src / "info" / "licenses" if src else None
         if lic_dir and lic_dir.is_dir():
             shutil.copytree(lic_dir, lic_root / name, dirs_exist_ok=True)
@@ -238,12 +265,18 @@ def collect_licenses(stage: Path, pkgs: dict, pkgs_dirs: list[Path], env_meta: d
             (lic_root / name).mkdir(parents=True, exist_ok=True)
             for f in (src / "info").glob("LICENSE*"):
                 shutil.copy2(f, lic_root / name / f.name)
+        elif note.startswith("  [packaging"):
+            robostack.append(name)
+        elif note:
+            meta_only.append(name)
         else:
             without.append(name)
     lines += ["", "RViz itself is BSD-3-Clause licensed (see licenses/rviz)."]
     (stage / "THIRD_PARTY_NOTICES.txt").write_text(
         "\r\n".join(lines) + "\r\n", encoding="utf-8")
-    log(f"licenses collected for {len(pkgs) - len(without)}/{len(pkgs)} packages")
+    own = len(pkgs) - len(without) - len(robostack) - len(meta_only)
+    log(f"licenses: {own} packages with their own license files, {len(robostack)} RoboStack "
+        f"packages under the RoboStack license, {len(meta_only)} metapackages, {len(without)} without")
     if without:
         log("no license files in package cache for: " + ", ".join(without[:20])
             + (" ..." if len(without) > 20 else ""))
@@ -651,7 +684,8 @@ def cmd_finalize(a) -> None:
     pkgs_dirs = [Path(p) for p in a.pkgs_dir]
     env_meta = load_conda_meta(Path(a.env_prefix)) if a.env_prefix else {}
 
-    collect_licenses(stage, pkgs, pkgs_dirs, env_meta)
+    collect_licenses(stage, pkgs, pkgs_dirs, env_meta,
+                     robostack_license=cfg / "licenses" / "RoboStack-ros-noetic-LICENSE.txt")
     rviz_lic = Path(a.rviz_src) / "LICENSE"
     if rviz_lic.is_file():
         (stage / "licenses" / "rviz").mkdir(parents=True, exist_ok=True)
