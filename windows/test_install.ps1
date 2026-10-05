@@ -14,6 +14,16 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Fail($msg) { Write-Host "[test-install] FAIL: $msg"; exit 1 }
+
+# Print the end of a log file into the console, so a CI failure can be
+# diagnosed from the job log alone (artifacts are a separate download).
+function Show-Tail([string]$Path, [int]$Lines = 40) {
+  if (Test-Path -LiteralPath $Path) {
+    Write-Host "[test-install] ---- last $Lines lines of $(Split-Path -Leaf $Path) ----"
+    Get-Content -LiteralPath $Path -Tail $Lines -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
+  }
+  else { Write-Host "[test-install] ($(Split-Path -Leaf $Path) was not written)" }
+}
 function Check($cond, $msg) { if (-not $cond) { throw $msg } }
 
 # Run a snippet of batch code in a fresh cmd.exe and return its output.
@@ -74,9 +84,20 @@ try {
     $procs += Start-Process -FilePath cmd.exe -ArgumentList '/d', '/c', "`"$launchers\roscore.cmd`"" -PassThru -NoNewWindow `
       -RedirectStandardOutput "$LogDir\roscore.out.txt" -RedirectStandardError "$LogDir\roscore.err.txt"
     $master = $false
+    $nodes = ''
     for ($i = 0; $i -lt 60 -and -not $master; $i++) {
       Start-Sleep -Seconds 2
-      $master = (Invoke-Batch "call `"$launchers\rosnode.cmd`" list 2>nul") -match '/rosout'
+      $nodes = Invoke-Batch "call `"$launchers\rosnode.cmd`" list"
+      $master = $nodes -match '/rosout'
+    }
+    if (-not $master) {
+      Write-Host "[test-install] roscore process running: $(-not $procs[0].HasExited)$(if ($procs[0].HasExited) { " (exit code $($procs[0].ExitCode))" })"
+      Write-Host "[test-install] last 'rosnode list' output:"
+      ($nodes -split "`r?`n" | Select-Object -Last 20) | ForEach-Object { Write-Host "  $_" }
+      Show-Tail "$LogDir\roscore.out.txt"; Show-Tail "$LogDir\roscore.err.txt"
+      $rosLogs = Join-Path $env:ROS_HOME 'log'
+      Get-ChildItem -LiteralPath $rosLogs -Recurse -Filter '*.log' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime | Select-Object -Last 3 | ForEach-Object { Show-Tail $_.FullName 25 }
     }
     Check $master 'roscore did not come up (no /rosout node within 120 s; see roscore.*.txt)'
 
@@ -94,6 +115,7 @@ try {
       Start-Sleep -Seconds 2
       $node = (Invoke-Batch "call `"$launchers\rosnode.cmd`" list 2>nul") -match '/rviz'
     }
+    if (-not $node) { Show-Tail "$LogDir\rviz.out.txt"; Show-Tail "$LogDir\rviz.err.txt" }
     Check $node 'rviz did not register with the master within 90 s (see rviz.*.txt; a GPU/OpenGL driver is required)'
     Start-Sleep -Seconds 10                                # let it load the default displays
     Check ($null -ne (Get-Process -Name rviz -ErrorAction SilentlyContinue)) 'rviz.exe exited after starting (see rviz.*.txt)'
