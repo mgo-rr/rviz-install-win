@@ -27,6 +27,32 @@ function Show-Tail([string]$Path, [int]$Lines = 40) {
 }
 function Check($cond, $msg) { if (-not $cond) { throw $msg } }
 
+# Re-run a crashing program under cdb (Windows SDK debugger, preinstalled on
+# GitHub's Windows runners) and print the stack at the first access violation
+# plus loaded/unloaded modules. Batch code in $Setup prepares the environment.
+function Show-CrashStack([string]$Exe, [string]$Setup, [int]$TimeoutSec = 180) {
+  $cdb = @("${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe",
+           "$env:ProgramFiles\Windows Kits\10\Debuggers\x64\cdb.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+  if (-not $cdb) { Write-Host '[test-install] (cdb.exe not found; no stack trace)'; return }
+  $out = Join-Path $LogDir ("{0}-cdb.txt" -f [IO.Path]::GetFileNameWithoutExtension($Exe))
+  $tmp = Join-Path $env:TEMP ("rviz-cdb-{0}.cmd" -f [guid]::NewGuid())
+  # -g: skip the initial breakpoint, so the commands run at the first exception
+  $cmds = '.ecxr; kn 40; lm; q'
+  Set-Content -Path $tmp -Encoding ASCII -Value "@echo off`r`n$Setup`r`n`"$cdb`" -g -G -c `"$cmds`" `"$Exe`" > `"$out`" 2>&1"
+  $p = Start-Process -FilePath cmd.exe -ArgumentList '/d', '/c', "`"$tmp`"" -PassThru -WindowStyle Hidden
+  if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+    & cmd.exe /d /c "taskkill /T /F /PID $($p.Id) >nul 2>&1"
+    Write-Host "[test-install] (no crash under cdb within $TimeoutSec s)"
+  }
+  Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $out) {
+    $text = Get-Content -LiteralPath $out
+    $from = [Math]::Max(0, ($text | Select-String -Pattern 'Access violation|\(.*\): ' | Select-Object -First 1).LineNumber - 3)
+    Write-Host "[test-install] ---- cdb: $(Split-Path -Leaf $Exe) (full log: $(Split-Path -Leaf $out)) ----"
+    $text | Select-Object -Skip $from | Where-Object { $_ -notmatch '^\s*$' } | Select-Object -First 120 | ForEach-Object { Write-Host "  $_" }
+  }
+}
+
 # Windows Error Reporting's record of the latest crashes (faulting module and
 # offset), so a crash with no output of its own can still be diagnosed.
 function Show-CrashEvent([datetime]$Since) {
@@ -162,11 +188,17 @@ try {
       $now = @((Invoke-Batch "call `"$launchers\rosnode.cmd`" list 2>nul") -split "`r?`n" | Where-Object { $_ -match '^/rviz' })
       $node = @($now | Where-Object { $before -notcontains $_ }).Count -gt 0
     }
-    if (-not $node) { Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt"; Show-CrashEvent $swStart }
+    if (-not $node) {
+      Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt"; Show-CrashEvent $swStart
+      Show-CrashStack (Join-Path $Prefix 'Library\mesa\rviz.exe') "call `"$launchers\ros_env.bat`"`r`nset GALLIUM_DRIVER=llvmpipe"
+    }
     Check $node 'software-rendering rviz did not register with the master within 120 s (see rviz-software.*.txt)'
     Start-Sleep -Seconds 15                                # let it render the default displays
     $rv = Get-Process -Name rviz -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $rv) { Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt"; Show-CrashEvent $swStart }
+    if (-not $rv) {
+      Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt"; Show-CrashEvent $swStart
+      Show-CrashStack (Join-Path $Prefix 'Library\mesa\rviz.exe') "call `"$launchers\ros_env.bat`"`r`nset GALLIUM_DRIVER=llvmpipe"
+    }
     Check ($null -ne $rv) 'software-rendering rviz.exe exited after starting (see rviz-software.*.txt)'
     Check ($rv.Path -eq (Join-Path $Prefix 'Library\mesa\rviz.exe')) "rviz-software.cmd started $($rv.Path), not Library\mesa\rviz.exe"
     $gl = @($rv.Modules | Where-Object { $_.ModuleName -eq 'opengl32.dll' } | ForEach-Object { $_.FileName })
