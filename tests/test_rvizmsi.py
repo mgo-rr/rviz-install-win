@@ -462,3 +462,11 @@ def test_rviz_patch_null_check_in_handle_scheme_not_found():
     patch = (REPO / "patches/1.14.26/0001-windows-msvc-relocatable.patch").read_text(encoding="utf-8")
     assert "+++ b/src/rviz/selection/selection_manager.cpp" in patch
     assert '+  bool has_pick_param = rend && !rend->getUserObjectBindings().getUserAny("pick_handle").isEmpty();' in patch
+
+
+def test_ros_env_defaults_openblas_to_one_thread(tmp_path):
+    # OpenBLAS's worker threads crashed rviz.exe when the camera displays
+    # loaded OpenCV; a value the user set must win.
+    rvizmsi.write_launchers(tmp_path, r"C:\opt\rviz\noetic")
+    env = (tmp_path / "launchers" / "ros_env.bat").read_bytes().decode("ascii")
+    assert 'if not defined OPENBLAS_NUM_THREADS set "OPENBLAS_NUM_THREADS=1"' in env

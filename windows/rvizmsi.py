@@ -649,6 +649,10 @@ set "PYTHONPATH=%RVIZ_ROOT%\Library\lib\site-packages"
 set "PYTHONHOME="
 set "PYTHONNOUSERSITE=1"
 set "PYTHONDONTWRITEBYTECODE=1"
+rem OpenBLAS (loaded by OpenCV for rviz's camera displays) crashed rviz.exe
+rem when starting its worker threads (seen with D3D12 OpenGL in a VM); rviz
+rem gains nothing from BLAS threads. Keep any value the user set.
+if not defined OPENBLAS_NUM_THREADS set "OPENBLAS_NUM_THREADS=1"
 set "QT_PLUGIN_PATH=%RVIZ_ROOT%\Library\plugins"
 set "RVIZ_OGRE_PLUGIN_DIR=%RVIZ_ROOT%\Library\bin"
 if not defined ROS_MASTER_URI set "ROS_MASTER_URI=http://localhost:11311"

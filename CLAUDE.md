@@ -45,7 +45,7 @@ Pipeline steps:
 
 ```
 pwsh -NoProfile -File tests/Test-Build.ps1     # 103 checks, stubbed tools, PS 5.1 + 7
-python -m pytest -q tests                      # 26 passed, 1 skipped (PE sample test needs Windows DLLs)
+python -m pytest -q tests                      # 27 passed, 1 skipped (PE sample test needs Windows DLLs)
 python tests/check_wxs_schema.py <wix-v5.0.2 source checkout>
 git -C <rviz 1.14.26 clone> apply --check patches/1.14.26/0001-windows-msvc-relocatable.patch
 ```
@@ -79,7 +79,7 @@ CI (`.github/workflows/ci.yml`, windows-2022):
 - Boost lib dir for the sip/qmake link (header autolinking)
 - `RVIZ_EXPORT` on every property class with a templated constructor (String, Float, Int, Color, Quaternion, Enum, EditableEnum, DisplayVisibility, DisplayGroupVisibility). Otherwise MSVC compiles the constructor into rviz_default_plugin with the import thunk's address as vtable, and rviz.exe crashes at start-up: 0xC0000005 in `Qt5Core_conda!QObjectPrivate::connectImpl+0x2b2` (offset 0x1e1922) from `rviz::InitialPoseTool::InitialPoseTool`. Releases v1.14.26-1..-4 and RoboStack's own win-64 rviz 1.14.26 build 24 have this crash (proved with `robostack-rviz-check.yml` + cdb). pytest guards the hunks.
 - Null check `rend &&` in `SelectionManager::handleSchemeNotFound` (selection_manager.cpp:1056, unfixed upstream). On Mesa (llvmpipe and the D3D12 Compatibility Pack) the Sphere/FlatSquare point cloud materials log `No techniques available`; OGRE then calls the handler with rend == nullptr and rviz crashed in `OgreMain!Ogre::UserObjectBindings::getUserAny` (offset 0x21daea) during bag playback. test-install renders a cloud in both styles with rviz-software.
-- Open (2026-10-07): with the D3D12 Compatibility Pack and the ops layout, rviz.exe crashed in `openblas.dll` (offset 0x27e390, right after `blas_thread_init`, at a function's first `push`) when the camera displays loaded OpenCV. `set OPENBLAS_NUM_THREADS=1` is the pending test; not yet the default. Mesa also rejects `indexed_8bit_image` (map displays): `active samplers with a different type refer to the same texture image unit` - maps not drawn, no crash.
+- `ros_env.bat` defaults `OPENBLAS_NUM_THREADS=1` (keeps a user value). With the D3D12 Compatibility Pack and the ops layout, rviz.exe crashed in `openblas.dll` (offset 0x27e390, right after `blas_thread_init`, at a function's first `push`) when the camera displays loaded OpenCV; with the variable set, the same layout loaded fine (one run, 2026-10-07). Still open: Mesa rejects `indexed_8bit_image` (map displays not drawn: `active samplers with a different type refer to the same texture image unit`) and has no technique for the Sphere/FlatSquare point cloud styles, which logs two errors per point cloud message.
 
 **Packages:**
 

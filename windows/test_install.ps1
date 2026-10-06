@@ -118,6 +118,8 @@ try {
   Write-Host '[test-install] bundled python + rospy import'
   $py = (Invoke-Batch "call `"$launchers\ros_env.bat`"`r`npython -c `"import rospy, sys; print(sys.prefix)`" 2>nul" -Paths).Trim()
   Check ($py -like "$Prefix*") "bundled python/rospy check returned '$py'"
+  $blas = (Invoke-Batch "set OPENBLAS_NUM_THREADS=`r`ncall `"$launchers\ros_env.bat`"`r`necho blas=%OPENBLAS_NUM_THREADS%").Trim()
+  Check ($blas -match 'blas=1$') "ros_env.bat does not default OPENBLAS_NUM_THREADS to 1 ($blas)"
 
   # ---- live runtime: roscore from the bundle, then rviz connecting to it ----
   Write-Host '[test-install] roscore + rviz live check (bundled ROS runtime only)'
