@@ -37,9 +37,33 @@ full build and the install / run / uninstall test. No GitHub account is
 needed to download.
 
 > **Status:** CI builds the MSI end to end on a GitHub-hosted Windows runner
-> and test-installs it (install, rviz `--help`, rospack, rospy, roscore,
-> launcher auto-start, uninstall). Opening the rviz window itself needs a real
-> PC with an OpenGL driver; check that once per release.
+> and test-installs it: install, rviz `--help`, rospack, rospy, roscore,
+> launcher auto-start, a real rviz window with software rendering (the runner
+> has no GPU), uninstall. RViz on a PC's own GPU driver is not covered by CI;
+> check it once per release.
+
+## This MSI or ROS Noetic desktop-full?
+
+This MSI is for **looking at a robot**: RViz with just enough ROS around it.
+A full ROS Noetic installation for Windows (RoboStack's
+`ros-noetic-desktop-full` via conda/pixi, or Microsoft's earlier *ROS on
+Windows* Chocolatey packages) is for **developing ROS software**. Both use
+the same prebuilt ROS, Qt and OGRE libraries from RoboStack underneath.
+
+| | This MSI | ROS Noetic desktop-full |
+|---|---|---|
+| **For** | Viewing robots (Robo Care support, demos) | Writing, building and debugging ROS packages |
+| **Contains** | RViz, roscore, `rostopic`, `rosnode`, `rosservice`, `rosparam`, `roslaunch`, rospy, compressed image transport | All of that plus rqt and its plugins, Gazebo, perception (PCL, OpenCV tools), urdf/xacro, navigation libraries, catkin build tools |
+| **Install** | One signed MSI; double-click | Install conda/pixi, create an environment, install packages |
+| **Size** | ~460 MiB download, ~1.5 GiB installed | Several GB, more with compilers |
+| **Start RViz** | Start menu > RViz; a local roscore starts and stops by itself | Open a shell, activate the environment, run `roscore`, then `rviz` |
+| **Build your own nodes** | No | Yes |
+| **PC without a GPU driver (VM, remote desktop)** | *RViz (software rendering)* shortcut included | Set up a software OpenGL yourself |
+| **Affects other software** | No: private runtime; only `launchers\` goes on PATH | The environment and shell setup are yours to manage |
+| **RViz itself** | Built from source with the [Windows fixes](#why-robostack--a-patch); CI opens it on every build | RoboStack's Windows rviz 1.14.26 (build 24) crashes at start-up as of October 2026 (missing `RVIZ_EXPORT`, see [the patch](#why-robostack--a-patch)) |
+
+Need rqt, Gazebo or your own nodes on Windows? Use a RoboStack environment.
+Only need to see what a robot sees? Use this MSI.
 
 ---
 
