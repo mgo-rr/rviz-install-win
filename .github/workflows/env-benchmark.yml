@@ -1,0 +1,163 @@
+name: Env tool benchmark
+
+# Which package manager creates the rviz build environment fastest on a
+# GitHub-hosted Windows runner: micromamba (what build-rviz-msi.ps1 uses),
+# pixi, or conda (Miniforge)? Everything else in the MSI build (compile, pack,
+# WiX, test-install) is identical whichever tool creates the environment, so
+# this step is the only one that can differ.
+#
+# Each job starts from an empty package cache and solves + installs the SAME
+# specs (config/conda-packages.txt) from the SAME channels (robostack-noetic,
+# then conda-forge, strict priority), then deletes the env and installs it again
+# with the package cache warm. Times are reported in the run summary.
+#
+# Manual only: gh workflow run env-benchmark.yml
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [micromamba, pixi, pixi-prefix-dev, conda]
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      BM: C:\bm
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Specs
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:BM | Out-Null
+          $specs = Get-Content config/conda-packages.txt | ForEach-Object { ($_ -replace '#.*$', '').Trim() } | Where-Object { $_ }
+          Set-Content -Path "$env:BM\specs.txt" -Value $specs -Encoding ascii
+          "{0} specs" -f @($specs).Count
+
+      - name: Install the tool
+        id: tool
+        run: |
+          $t = Measure-Command {
+            switch ('${{ matrix.tool }}') {
+              'micromamba' {
+                Invoke-WebRequest -UseBasicParsing -OutFile "$env:BM\micromamba.exe" `
+                  https://github.com/mamba-org/micromamba-releases/releases/download/2.9.0-0/micromamba-win-64
+              }
+              { $_ -like 'pixi*' } {
+                Invoke-WebRequest -UseBasicParsing -OutFile "$env:BM\pixi.exe" `
+                  https://github.com/prefix-dev/pixi/releases/latest/download/pixi-x86_64-pc-windows-msvc.exe
+              }
+              'conda' {
+                Invoke-WebRequest -UseBasicParsing -OutFile "$env:BM\miniforge.exe" `
+                  https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Windows-x86_64.exe
+                Start-Process -Wait -FilePath "$env:BM\miniforge.exe" -ArgumentList `
+                  '/InstallationType=JustMe', '/RegisterPython=0', '/AddToPath=0', '/S', "/D=$env:BM\miniforge"
+              }
+            }
+          }
+          "install_s=$([int]$t.TotalSeconds)" >> $env:GITHUB_OUTPUT
+          switch ('${{ matrix.tool }}') {
+            'micromamba' { & "$env:BM\micromamba.exe" --version }
+            { $_ -like 'pixi*' } { & "$env:BM\pixi.exe" --version }
+            'conda' { & "$env:BM\miniforge\Scripts\conda.exe" --version; & "$env:BM\miniforge\Scripts\conda.exe" config --show solver }
+          }
+
+      - name: Write pixi.toml
+        if: startsWith(matrix.tool, 'pixi')
+        shell: python
+        run: |
+          import os, re
+          bm = os.environ["BM"]
+          host = "https://prefix.dev/" if "${{ matrix.tool }}" == "pixi-prefix-dev" else "https://conda.anaconda.org/"
+          deps = []
+          for line in open(os.path.join(bm, "specs.txt")):
+              line = line.strip()
+              if not line:
+                  continue
+              m = re.fullmatch(r"([A-Za-z0-9_.\-]+)=([^=]+)=(.+)", line)       # name=version=build
+              if m:
+                  deps.append(f'{m[1]} = {{ version = "{m[2]}", build = "{m[3]}" }}')
+                  continue
+              m = re.fullmatch(r"([A-Za-z0-9_.\-]+)\s*(.*)", line)              # name [version]
+              deps.append(f'{m[1]} = "{m[2].replace(" ", "") or "*"}"')
+          toml = "\n".join([
+              "[workspace]", 'name = "bm"',
+              f'channels = ["{host}robostack-noetic", "{host}conda-forge"]',
+              'platforms = ["win-64"]', "", "[dependencies]", *deps, ""])
+          open(os.path.join(bm, "pixi.toml"), "w").write(toml)
+          print(toml)
+
+      - name: Create the environment (cold cache, then warm cache)
+        id: env
+        run: |
+          $env:CONDA_PKGS_DIRS = "$env:BM\pkgs"            # micromamba / conda
+          $env:PIXI_CACHE_DIR = "$env:BM\pkgs"             # pixi
+          $env:RATTLER_CACHE_DIR = "$env:BM\pkgs"
+          $ch = @('--override-channels', '-c', 'robostack-noetic', '-c', 'conda-forge', '--strict-channel-priority')
+          function New-Env {
+            switch ('${{ matrix.tool }}') {
+              'micromamba' { & "$env:BM\micromamba.exe" create -y -q -r "$env:BM\mm" -p "$env:BM\env" @ch --file "$env:BM\specs.txt" }
+              'conda'      { & "$env:BM\miniforge\Scripts\conda.exe" create -y -q -p "$env:BM\env" @ch --file "$env:BM\specs.txt" }
+              default      { & "$env:BM\pixi.exe" install --manifest-path "$env:BM\pixi.toml" }
+            }
+            if ($LASTEXITCODE) { throw "environment creation failed ($LASTEXITCODE)" }
+          }
+          function Get-EnvDir { if ('${{ matrix.tool }}' -like 'pixi*') { "$env:BM\.pixi\envs\default" } else { "$env:BM\env" } }
+          $cold = Measure-Command { New-Env | Out-Host }
+          $envDir = Get-EnvDir
+          $pkgs = @(Get-ChildItem "$envDir\conda-meta" -Filter *.json).Count
+          $ver = @{}
+          foreach ($n in 'python', 'ogre', 'qt-main', 'libblas', 'libopencv', 'ros-noetic-roscpp') {
+            $f = Get-ChildItem "$envDir\conda-meta" -Filter "$n-*.json" | Where-Object { $_.Name -match "^$([regex]::Escape($n))-\d" } | Select-Object -First 1
+            if ($f) { $j = Get-Content $f.FullName -Raw | ConvertFrom-Json; $ver[$n] = "$($j.version)=$($j.build)" }
+          }
+          if (-not (Test-Path "$envDir\python.exe")) { throw "no python.exe in $envDir" }
+          # warm: same package cache, fresh environment (and lock file for pixi)
+          Remove-Item -Recurse -Force $envDir
+          $warm = Measure-Command { New-Env | Out-Host }
+          $r = [ordered]@{ tool = '${{ matrix.tool }}'; install_s = [int]'${{ steps.tool.outputs.install_s }}';
+                           cold_s = [int]$cold.TotalSeconds; warm_s = [int]$warm.TotalSeconds; packages = $pkgs; versions = $ver }
+          $r | ConvertTo-Json -Depth 3 | Set-Content "$env:BM\result.json"
+          Get-Content "$env:BM\result.json"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bench-${{ matrix.tool }}
+          path: C:\bm\result.json
+
+  report:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bench-*
+          path: results
+      - name: Summary table
+        shell: python
+        run: |
+          import glob, json, os
+          rows = []
+          for f in sorted(glob.glob("results/*/result.json")):
+              with open(f, encoding="utf-8-sig") as fh:
+                  rows.append(json.load(fh))
+          rows.sort(key=lambda r: r["install_s"] + r["cold_s"])
+          out = ["| Tool | Install tool (s) | Create env, cold cache (s) | Create env, warm cache (s) | Total cold (s) | Packages | python | ogre | qt-main | libblas | roscpp |",
+                 "|---|---|---|---|---|---|---|---|---|---|---|"]
+          for r in rows:
+              v = r.get("versions", {})
+              out.append(f"| {r['tool']} | {r['install_s']} | {r['cold_s']} | {r['warm_s']} | {r['install_s'] + r['cold_s']} | {r['packages']} | "
+                         f"{v.get('python','')} | {v.get('ogre','')} | {v.get('qt-main','')} | {v.get('libblas','')} | {v.get('ros-noetic-roscpp','')} |")
+          text = "\n".join(out)
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write("## Environment creation time (windows-2022)\n\n" + text + "\n")
