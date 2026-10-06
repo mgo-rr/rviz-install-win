@@ -43,6 +43,7 @@ REQUIRED_FILES = [
     "Library/share/rviz/package.xml",
     "Library/share/rviz/plugin_description.xml",
     "Library/share/rviz/ogre_media",
+    "Library/bin/rosbag",          # launchers\rosbag.cmd (bag review)
     "Library/plugins/platforms/qwindows.dll",
     # ROS environment chain run by launchers\ros_env.bat (same as RoboStack's
     # activation). catkin's setup.bat does `exit 22` - closing the launcher's
@@ -66,6 +67,8 @@ REQUIRED_ROS_PACKAGES = [
     # ROS master / core tools
     "roslaunch", "rosmaster", "rosout", "rosgraph", "rosgraph_msgs",
     "rosparam", "rospack", "rostopic", "rosnode", "rosservice",
+    # bag review: launchers\rosbag.cmd
+    "rosbag",
 ]
 
 # rosdep keys that are system libraries (provided by conda packages, not ROS
@@ -107,9 +110,10 @@ MESA_DLLS = ["opengl32.dll", "libgallium_wgl.dll"]
 MESA_OPTIONAL_DLLS = ["libglapi.dll"]          # older Mesa builds split this out
 
 # ROS command-line tools that get a thin launcher in <prefix>\launchers\.
+# rosbag: replay bag files from the Admin Portal into RViz (bag review).
 ROS_TOOLS = [
     "roscore", "roslaunch", "rostopic", "rosnode", "rosservice", "rosparam",
-    "rosmsg", "rossrv", "rospack",
+    "rosmsg", "rossrv", "rospack", "rosbag",
 ]
 
 

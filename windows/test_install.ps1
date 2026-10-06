@@ -102,7 +102,7 @@ if ($rc -ne 0 -and $rc -ne 3010) { Fail "msiexec /i returned $rc (see $LogDir\in
 $failure = $null
 try {
   $launchers = Join-Path $Prefix 'launchers'
-  foreach ($f in 'rviz.cmd', 'rviz-software.cmd', 'roscore.cmd', 'ros_env.bat', 'rospack.cmd') {
+  foreach ($f in 'rviz.cmd', 'rviz-software.cmd', 'roscore.cmd', 'ros_env.bat', 'rospack.cmd', 'rosbag.cmd') {
     Check (Test-Path (Join-Path $launchers $f)) "missing $f"
   }
 
@@ -147,6 +147,26 @@ try {
 
     $topics = Invoke-Batch "call `"$launchers\rostopic.cmd`" list 2>nul"
     Check ($topics -match '/rosout') "rostopic list does not show /rosout: $topics"
+
+    # ---- rosbag (bag review): a bag with bz2-compressed chunks, the format the
+    # Admin Portal produces for requested time ranges, must open and replay.
+    Write-Host '[test-install] rosbag.cmd: info and play a bz2-compressed bag'
+    $bag = Join-Path $LogDir 'rosbag-test.bag'
+    $maker = Join-Path $LogDir 'make_test_bag.py'
+    Set-Content -Path $maker -Encoding ASCII -Value @(
+      'import sys, rosbag, rospy',
+      'from std_msgs.msg import String',
+      'with rosbag.Bag(sys.argv[1], "w", compression="bz2") as bag:',
+      '    for i in range(5):',
+      '        bag.write("/rviz_msi_test", String(data="message " + str(i)), rospy.Time(1700000000 + i))',
+      'print("bag written")')
+    $made = Invoke-Batch "call `"$launchers\ros_env.bat`"`r`n`"%RVIZ_ROOT%\python.exe`" `"$maker`" `"$bag`" 2>&1"
+    Check ($made -match 'bag written') "could not write a test bag with the bundled rosbag module: $made"
+    $info = Invoke-Batch "call `"$launchers\rosbag.cmd`" info `"$bag`" 2>&1"
+    ($info -split "`r?`n") | Where-Object { $_ -match '^(compression|messages|topics):' } | ForEach-Object { Write-Host "[test-install]   $($_.Trim())" }
+    Check ($info -match 'compression:\s+bz2' -and $info -match 'messages:\s+5\b') "rosbag info did not read the bz2 bag: $info"
+    $play = Invoke-Batch "call `"$launchers\rosbag.cmd`" play -q `"$bag`" 2>&1`r`necho rosbag-exit=%ERRORLEVEL%"
+    Check ($play -match 'rosbag-exit=0') "rosbag play failed: $play"
 
     if ($SkipGui) {
       Write-Host '[test-install] -SkipGui: not opening the rviz window (roscore/rostopic checked above)'

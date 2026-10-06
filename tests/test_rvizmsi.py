@@ -138,7 +138,7 @@ def test_finalize_end_to_end(stage, monkeypatch):
     assert (st / "licenses/ogre/LICENSE.txt").exists()
     assert (st / "licenses/rviz/LICENSE").exists()
     # launchers: CRLF, ascii
-    for name in ["ros_env.bat", "rviz.cmd", "roscore.cmd", "rostopic.cmd", "ros_shell.cmd"]:
+    for name in ["ros_env.bat", "rviz.cmd", "roscore.cmd", "rostopic.cmd", "rosbag.cmd", "ros_shell.cmd"]:
         data = (st / "launchers" / name).read_bytes()
         assert b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b"")
         data.decode("ascii")

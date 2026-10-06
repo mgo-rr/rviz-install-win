@@ -196,7 +196,7 @@ Pinned defaults (versions, hashes, product identity, UpgradeCode) live in
   * *Desktop shortcut* (off by default).
 * Launchers in `launchers\`: `rviz.cmd`, `rviz-software.cmd`, `roscore.cmd`, `roslaunch.cmd`,
   `rostopic.cmd`, `rosnode.cmd`, `rosservice.cmd`, `rosparam.cmd`,
-  `rosmsg.cmd`, `rossrv.cmd`, `rospack.cmd`, `ros_shell.cmd`, and
+  `rosmsg.cmd`, `rossrv.cmd`, `rospack.cmd`, `rosbag.cmd`, `ros_shell.cmd`, and
   `ros_env.bat` (call this from your own scripts to get the ROS environment).
 * `ROS_MASTER_URI` defaults to `http://localhost:11311` when it isn't already
   set. To connect to a robot, set it (plus `ROS_IP`/`ROS_HOSTNAME`) before
@@ -256,6 +256,42 @@ in `Library\mesa\` next to a copy of `rviz.exe` that only
 
 The other shortcuts: *roscore* starts a master on its own, *ROS Noetic Shell*
 opens a command prompt with `rostopic`, `rosnode`, `roslaunch`, ... ready.
+
+### Reviewing a bag file
+
+Replay a recorded bag into RViz to see what the robot saw: point clouds,
+camera images, maps, planned paths, dock detection.
+
+1. **Get the bag.** A `.bag` opens as is, also when its chunks are
+   compressed (bz2 or lz4). A whole file ending in `.bag.bz2` must be
+   decompressed first, e.g. with 7-Zip. A long recording split into
+   `_0.bag`, `_1.bag`, ... is played as one, in order (step 4), so the map
+   carries over from part to part.
+2. **Start menu > roscore.** Leave it running.
+3. **Start menu > ROS Noetic Shell**, then use the bag's time instead of the
+   PC's clock and start RViz (or `rviz-software` on a PC without a GPU
+   driver):
+
+   ```
+   rosparam set use_sim_time true
+   rviz -d C:\path\to\your-layout.rviz
+   ```
+
+4. **A second ROS Noetic Shell**, in the bag's folder:
+
+   ```
+   rosbag info deliver_2026-10-06-09-00-00_0.bag
+   rosbag play --clock --pause deliver_2026-10-06-09-00-00_0.bag deliver_2026-10-06-09-00-00_1.bag
+   ```
+
+   `--pause` starts paused: press Space in this window to play or pause and
+   `s` to step. `-r 0.5` plays at half speed, `-s 60` starts 60 s in.
+
+In RViz, set *Fixed Frame* to `map` and add displays by topic (*Add > By
+topic*), or open a saved layout with *File > Open Config*. A display stays
+empty if its topic was not recorded in that bag (`rosbag info` lists the
+topics). To replay again, stop `rosbag play`, press *Reset* at the bottom of
+RViz and start it again, so that RViz drops the old transforms.
 
 ### The bundled ROS runtime
 
