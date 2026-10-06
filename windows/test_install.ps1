@@ -275,7 +275,8 @@ try {
       '    rate.sleep()')
     $procs += Start-Process -FilePath cmd.exe -PassThru -WindowStyle Hidden -ArgumentList '/d', '/c', `
       "`"call `"$launchers\ros_env.bat`" && `"$(Join-Path $Prefix 'python.exe')`" `"$cloudPub`"`""
-    $procs += Start-Process -FilePath cmd.exe -ArgumentList '/d', '/c', "`"$launchers\rviz-software.cmd`" -d `"$cloudCfg`"" -PassThru -NoNewWindow `
+    # outer quotes: with more than two quotes, cmd /c strips the first and last
+    $procs += Start-Process -FilePath cmd.exe -ArgumentList '/d', '/c', "`"`"$launchers\rviz-software.cmd`" -d `"$cloudCfg`"`"" -PassThru -NoNewWindow `
       -RedirectStandardOutput "$sw.out.txt" -RedirectStandardError "$sw.err.txt"
     $node = $false
     for ($i = 0; $i -lt 60 -and -not $node; $i++) {
