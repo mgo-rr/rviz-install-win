@@ -237,6 +237,8 @@ try {
     # Point clouds drawn as Spheres / Flat Squares: their materials have no
     # technique Mesa supports, and OGRE then asks rviz for a fallback with
     # rend == nullptr, which crashed rviz before the null check in the patch.
+    # The tools (2D Pose Estimate = InitialPoseTool, the first RVIZ_EXPORT
+    # crash) are listed because a config without Tools creates none.
     $cloudCfg = Join-Path $LogDir 'point_cloud_test.rviz'
     Set-Content -Path $cloudCfg -Encoding ASCII -Value @(
       'Visualization Manager:',
@@ -259,7 +261,13 @@ try {
       '      Size (m): 0.05',
       '  Global Options:',
       '    Fixed Frame: map',
-      '  Name: root')
+      '  Name: root',
+      '  Tools:',
+      '    - Class: rviz/Interact',
+      '    - Class: rviz/SetInitialPose',
+      '      Topic: /initialpose',
+      '    - Class: rviz/SetGoal',
+      '      Topic: /move_base_simple/goal')
     $cloudPub = Join-Path $LogDir 'cloud_publisher.py'
     Set-Content -Path $cloudPub -Encoding ASCII -Value @(
       'import math, rospy',
