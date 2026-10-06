@@ -109,10 +109,13 @@ CI (`.github/workflows/ci.yml`, windows-2022):
 
 ## Current state / next steps (2026-10-06)
 
-- Releases: `v1.14.26-1`, `v1.14.26-2`, `v1.14.26-3`. `-3` ships the launcher hardening: window stays open, `cmd /d` shortcuts, activation log, and the `_CATKIN_ENVIRONMENT_HOOKS_COUNT` fix for an AutoRun that exits.
-- Open issue: a teammate's Start menu RViz (Windows 11, v1.14.26-1) flashed and closed. Suspected cause: a stale cmd AutoRun. Waiting for `reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun` (and HKLM). Ask them to retry with `v1.14.26-3`.
+- Releases: `v1.14.26-1` to `-4` crash at RViz start-up (missing `RVIZ_EXPORT`, see above) and are marked pre-release with a warning. `v1.14.26-5` is the first working one: export fix, "RViz (software rendering)" shortcut (Mesa llvmpipe), signed MSI.
+- Verified 2026-10-06 in a QEMU/KVM Windows 11 VM: the normal *RViz* shortcut renders through Microsoft's OpenCL/OpenGL/Vulkan Compatibility Pack (D3D12, OpenGL 4.6), and *RViz (software rendering)* renders with llvmpipe (LLVM 22.1.8, OpenGL 4.6). CI opens a real rviz window with Mesa on every build.
+- Open issue: a teammate's Start menu RViz (Windows 11, v1.14.26-1) flashed and closed. Likely this start-up crash rather than AutoRun; ask them to try `v1.14.26-5`. The AutoRun `reg query` is still useful.
 - Open question: the same teammate reported the installer "asked for installation with Conda". Nothing in the MSI or launchers does that (the license screen only mentions RoboStack / conda-forge). Waiting for a screenshot or the exact wording.
+- Upstream (later, Mahal's call): report the stack trace and the `RVIZ_EXPORT` fix on RoboStack/ros-noetic#534 or as a PR to their `patch/ros-noetic-rviz.patch`.
+- Cosmetic: OGRE's hidden helper window shows as "OgreWindow(0)" in the taskbar.
 - Not yet verified on a real PC with a GPU: the rviz window itself, opened from the Start menu.
-- QEMU/KVM Win11 VM (virtio 3D, which gives Windows guests no OpenGL): no OpenGL at all, hence the software-rendering shortcut. The crash seen there even with OpenGL (Microsoft's Compatibility Pack, D3D12) was the export bug above, not the driver.
+- QEMU/KVM with virtio 3D gives Windows guests no OpenGL of their own: use the software-rendering shortcut or the Compatibility Pack.
 - Code signing (from v1.14.26-4): internal self-signed cert `certs/robo-care-code-signing.cer` (SHA-1 `F8CB7F5A10EBE5DDC4F2CDCBCE3598E0FF97899F`, valid to 2031-10-06). CI secrets `SIGN_PFX_BASE64` / `SIGN_PFX_PASSWORD`; a `v*` tag fails without them. The private key exists only in those secrets and in one backup kept by the Robo Care Team; never recreate, move or delete it without asking Mahal. IT must deploy the .cer to Root + TrustedPublisher (docs/code-signing.md). SmartScreen can still warn on browser downloads; Intune deployment avoids it.
 - Env benchmark (run 37421285797, windows-2022, one sample each), total cold seconds: micromamba 218, pixi via prefix.dev 223, conda (Miniforge) 307, pixi via conda.anaconda.org 504. Same python/ogre/qt/libblas/roscpp builds; pixi installs 297 packages vs 299 (difference not checked). Decision: stay on micromamba. The download host matters more than the tool.

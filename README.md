@@ -383,6 +383,7 @@ pipeline** with every external tool replaced by a recorder:
 | build: path too long | Use a shorter `-WorkDir` (e.g. `C:\b`) or enable Win32 long paths |
 | smoke: rviz.exe did not start | See `C:\rvb\out\smoke\rviz-help.txt`. Usually a missing DLL: check that `config\prune.txt` / `build-only-packages.txt` didn't remove it |
 | finalize: `runtime dependency check failed` | The message lists the missing ROS package or DLL; add the conda package to `config\conda-packages.txt` or `-ExtraPackages` |
+| v1.14.26-1 to -4: RViz exits right after `OpenGl version: ...` with error code -1073741819, on every PC | A bug in rviz's Windows build (missing `RVIZ_EXPORT` on property classes; RoboStack's own rviz has it too). Fixed in **v1.14.26-5**: uninstall the old version and install that one |
 | rviz window black / crashes on start (target PC), error code -1073741819 | OGRE needs a real OpenGL driver. VMs and RDP sessions without GPU support fail: use *RViz (software rendering)* (from v1.14.26-5). On a PC with a GPU, update its driver |
 | ICE validation errors | Inspect the output; `-SkipValidate` for a quick test build |
 

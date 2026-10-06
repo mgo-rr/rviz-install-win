@@ -10,15 +10,12 @@ name: RoboStack rviz check
 #
 # Mesa llvmpipe (conda-forge mesa-llvmpipe) puts opengl32.dll into
 # Library\bin, next to RoboStack's rviz.exe, so that rviz renders on the CPU;
-# the runner has no GPU. Manual (gh workflow run robostack-rviz-check.yml, once
-# this file is on main), and on pushes to the software-rendering branch that
-# change this file, since workflow_dispatch only works from the default branch.
+# the runner has no GPU. Manual only: gh workflow run robostack-rviz-check.yml
+# (result 2026-10-06: RoboStack's rviz 1.14.26 build 24 crashes in
+# InitialPoseTool; ours is fixed by RVIZ_EXPORT in the rviz patch)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [feature/software-rendering]
-    paths: ['.github/workflows/robostack-rviz-check.yml']
 
 permissions:
   contents: read
