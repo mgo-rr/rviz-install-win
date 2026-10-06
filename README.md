@@ -25,7 +25,7 @@ Most users only need the finished installer:
 3. Double-click the MSI (administrator rights are needed), then open
    **Start menu > RViz (ROS Noetic) > RViz**. See [Using RViz](#using-rviz).
 
-From v1.14.26-4 on, the MSI is signed with the Robo Care Team's internal
+The MSI is signed with the Robo Care Team's internal
 code-signing certificate. Windows shows the publisher as verified only on PCs
 where IT (or you) installed [`certs/robo-care-code-signing.cer`](certs/robo-care-code-signing.cer);
 SmartScreen may still warn on a browser download. See
@@ -330,14 +330,18 @@ Work dir (`C:\rvb`): `tools\` (micromamba, dotnet, wix), `mamba\pkgs`
 Tag a commit on `main` and push the tag:
 
 ```bash
-git tag -a v1.14.26-1 -m "RViz 1.14.26 installer, build 1"
-git push origin v1.14.26-1
+git tag -a v1.14.26-6 -m "RViz 1.14.26 installer, build 6"
+git push origin v1.14.26-6
 ```
+
+Use the next unused number. Never reuse one, not even of a deleted release
+(v1.14.26-1 to -4 were withdrawn test builds): a reused tag could be mistaken
+for an old download.
 
 CI builds, signs (secrets `SIGN_PFX_BASE64` / `SIGN_PFX_PASSWORD`, see
 [docs/code-signing.md](docs/code-signing.md); a tag without them fails) and
 test-installs the MSI as usual; if everything passes, the
-`release` job creates the GitHub Release `v1.14.26-1` with the MSI and its
+`release` job creates the GitHub Release `v1.14.26-6` with the MSI and its
 `.sha256` attached. It then
 appears under *Releases* on the repository's main page and at
 `/releases/latest`. A failed build publishes nothing; delete the tag, fix,
@@ -370,9 +374,9 @@ pipeline** with every external tool replaced by a recorder:
 
 | Symptom | Fix |
 |---|---|
-| Start menu *RViz* opens a window that closes at once (v1.14.26-1 and v1.14.26-2) | Usually a stale cmd **AutoRun** (left by `conda init` / `micromamba shell init` or an Anaconda uninstall) that makes every `cmd` exit at once. Check with `reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun` (and `HKLM\...`); remove the value if it points to a tool that is gone. To see any other error: Win+R, `cmd /d /k C:\opt\rviz\noetic\launchers\rviz.cmd`. From v1.14.26-3 on, the shortcuts start `cmd /d` (AutoRun is skipped) and the window stays open when RViz fails |
-| "Windows protected your PC" (SmartScreen) or *Unknown publisher* when opening the MSI | Releases before v1.14.26-4 are unsigned. Later ones are signed with an internal certificate: install it (see [docs/code-signing.md](docs/code-signing.md)) for a verified publisher. SmartScreen can still warn on a browser download: *More info > Run anyway*, or Properties > **Unblock** first. Deploying the MSI with Intune avoids it |
-| RViz fails and you need details (v1.14.26-3+) | The launcher window shows the error; package activation output is in `%LOCALAPPDATA%\RVizNoetic\activate.log`, ROS logs in `%USERPROFILE%\.ros\log` |
+| Start menu *RViz* opens a window that closes at once | Usually a stale cmd **AutoRun** (left by `conda init` / `micromamba shell init` or an Anaconda uninstall) that makes every `cmd` exit at once. Check with `reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun` (and `HKLM\...`); remove the value if it points to a tool that is gone. To see any other error: Win+R, `cmd /d /k C:\opt\rviz\noetic\launchers\rviz.cmd`. The shortcuts start `cmd /d`, so AutoRun is skipped, and the window stays open when RViz fails |
+| "Windows protected your PC" (SmartScreen) or *Unknown publisher* when opening the MSI | The MSI is signed with an internal certificate: install it (see [docs/code-signing.md](docs/code-signing.md)) for a verified publisher. SmartScreen can still warn on a browser download: *More info > Run anyway*, or Properties > **Unblock** first. Deploying the MSI with Intune avoids it |
+| RViz fails and you need details | The launcher window shows the error; package activation output is in `%LOCALAPPDATA%\RVizNoetic\activate.log`, ROS logs in `%USERPROFILE%\.ros\log` |
 | `... cannot be loaded because running scripts is disabled` | `powershell -ExecutionPolicy Bypass -File .\build-rviz-msi.ps1 ...` (and `Unblock-File` for downloaded zips) |
 | `Git for Windows (Git Bash) is required` | Install Git for Windows, or re-run with `-InstallGit` |
 | Git download: `SHA-256 mismatch`, signature not `Valid`, or unexpected signer | The download was corrupted, tampered with, or not published by the Git for Windows maintainer; nothing was installed |
@@ -383,8 +387,8 @@ pipeline** with every external tool replaced by a recorder:
 | build: path too long | Use a shorter `-WorkDir` (e.g. `C:\b`) or enable Win32 long paths |
 | smoke: rviz.exe did not start | See `C:\rvb\out\smoke\rviz-help.txt`. Usually a missing DLL: check that `config\prune.txt` / `build-only-packages.txt` didn't remove it |
 | finalize: `runtime dependency check failed` | The message lists the missing ROS package or DLL; add the conda package to `config\conda-packages.txt` or `-ExtraPackages` |
-| v1.14.26-1 to -4: RViz exits right after `OpenGl version: ...` with error code -1073741819, on every PC | A bug in rviz's Windows build (missing `RVIZ_EXPORT` on property classes; RoboStack's own rviz has it too). Fixed in **v1.14.26-5**: uninstall the old version and install that one |
-| rviz window black / crashes on start (target PC), error code -1073741819 | OGRE needs a real OpenGL driver. VMs and RDP sessions without GPU support fail: use *RViz (software rendering)* (from v1.14.26-5). On a PC with a GPU, update its driver |
+| An early test build (v1.14.26-1 to -4, withdrawn) is installed: RViz exits right after `OpenGl version: ...` with error code -1073741819 | A bug in rviz's Windows build (missing `RVIZ_EXPORT` on property classes; RoboStack's own rviz has it too), fixed from v1.14.26-5. Uninstall the old version and install the current release |
+| rviz window black / crashes on start (target PC), error code -1073741819 | OGRE needs a real OpenGL driver. VMs and RDP sessions without GPU support fail: use *RViz (software rendering)*. On a PC with a GPU, update its driver |
 | ICE validation errors | Inspect the output; `-SkipValidate` for a quick test build |
 
 ## Notes & licensing
