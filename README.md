@@ -189,6 +189,10 @@ Click **Start menu > RViz (ROS Noetic) > RViz**. That runs
   `ROS_IP` (or `ROS_HOSTNAME`) to this PC's address as well, so the robot can
   reach RViz.
 
+The shortcuts run `cmd.exe /d /c "...\launchers\rviz.cmd"`: `/d` skips any cmd AutoRun the PC may have, so a
+broken conda/micromamba hook cannot stop RViz from starting. If RViz fails, the window stays open with the error;
+package activation output is written to `%LOCALAPPDATA%\RVizNoetic\activate.log`.
+
 Switches (environment variables, e.g. set once with `setx`):
 
 | Variable | Effect |
@@ -332,7 +336,8 @@ pipeline** with every external tool replaced by a recorder:
 
 | Symptom | Fix |
 |---|---|
-| Start menu *RViz* opens a window that closes at once (v1.14.26-1 and v1.14.26-2) | Press Win+R, run `cmd /k C:\opt\rviz\noetic\launchers\rviz.cmd`: the window stays open and shows the error. From v1.14.26-3 on, the launcher keeps its window open by itself when RViz fails |
+| Start menu *RViz* opens a window that closes at once (v1.14.26-1 and v1.14.26-2) | Usually a stale cmd **AutoRun** (left by `conda init` / `micromamba shell init` or an Anaconda uninstall) that makes every `cmd` exit at once. Check with `reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun` (and `HKLM\...`); remove the value if it points to a tool that is gone. To see any other error: Win+R, `cmd /d /k C:\opt\rviz\noetic\launchers\rviz.cmd`. From v1.14.26-3 on, the shortcuts start `cmd /d` (AutoRun is skipped) and the window stays open when RViz fails |
+| RViz fails and you need details (v1.14.26-3+) | The launcher window shows the error; package activation output is in `%LOCALAPPDATA%\RVizNoetic\activate.log`, ROS logs in `%USERPROFILE%\.ros\log` |
 | `... cannot be loaded because running scripts is disabled` | `powershell -ExecutionPolicy Bypass -File .\build-rviz-msi.ps1 ...` (and `Unblock-File` for downloaded zips) |
 | `Git for Windows (Git Bash) is required` | Install Git for Windows, or re-run with `-InstallGit` |
 | Git download: `SHA-256 mismatch`, signature not `Valid`, or unexpected signer | The download was corrupted, tampered with, or not published by the Git for Windows maintainer; nothing was installed |

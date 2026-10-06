@@ -81,21 +81,29 @@
     <!-- ===== Start menu =========================================================
          Shortcut components use an HKCU key path: ICE38/ICE43 require it for
          components in profile folders even in perMachine packages (ICE57
-         then only warns). -->
+         then only warns).
+         The launchers are started as `cmd.exe /d /c ""<launcher>""` rather than
+         by pointing the shortcut at the .cmd file: Explorer runs a .cmd with
+         `cmd /c` WITHOUT /d, so the user's Command Processor AutoRun runs first,
+         and a stale one (left by conda/micromamba init or an Anaconda
+         uninstall) makes cmd exit at once - a window that flashes and closes. -->
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="AppMenuFolder" Name="$(var.ProductName)">
         <Component Id="StartMenuShortcuts">
           <Shortcut Id="StartRviz" Name="RViz"
                     Description="3D visualization tool for ROS (connects to ROS_MASTER_URI)"
-                    Target="[INSTALLFOLDER]launchers\rviz.cmd"
+                    Target="[System64Folder]cmd.exe"
+                    Arguments="/d /c &quot;&quot;[INSTALLFOLDER]launchers\rviz.cmd&quot;&quot;"
                     WorkingDirectory="INSTALLFOLDER" Icon="rviz.ico" />
           <Shortcut Id="StartRoscore" Name="roscore"
                     Description="Start a local ROS master"
-                    Target="[INSTALLFOLDER]launchers\roscore.cmd"
-                    WorkingDirectory="INSTALLFOLDER" />
+                    Target="[System64Folder]cmd.exe"
+                    Arguments="/d /c &quot;&quot;[INSTALLFOLDER]launchers\roscore.cmd&quot;&quot;"
+                    WorkingDirectory="INSTALLFOLDER" Icon="rviz.ico" />
           <Shortcut Id="StartRosShell" Name="ROS Noetic Shell"
                     Description="Command prompt with the bundled ROS environment"
-                    Target="[INSTALLFOLDER]launchers\ros_shell.cmd" Arguments="--home"
+                    Target="[System64Folder]cmd.exe"
+                    Arguments="/d /c &quot;&quot;[INSTALLFOLDER]launchers\ros_shell.cmd&quot; --home&quot;"
                     WorkingDirectory="INSTALLFOLDER" />
           <Shortcut Id="StartNotices" Name="Third-party notices"
                     Target="[INSTALLFOLDER]THIRD_PARTY_NOTICES.txt" />
@@ -110,7 +118,8 @@
     <StandardDirectory Id="DesktopFolder">
       <Component Id="DesktopShortcut">
         <Shortcut Id="DesktopRviz" Name="RViz (ROS Noetic)"
-                  Target="[INSTALLFOLDER]launchers\rviz.cmd"
+                  Target="[System64Folder]cmd.exe"
+                  Arguments="/d /c &quot;&quot;[INSTALLFOLDER]launchers\rviz.cmd&quot;&quot;"
                   WorkingDirectory="INSTALLFOLDER" Icon="rviz.ico" />
         <RegistryValue Root="HKCU" Key="Software\$(var.Manufacturer)\$(var.ProductKey)"
                        Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />

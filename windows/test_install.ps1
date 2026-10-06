@@ -140,16 +140,41 @@ try {
 
   # ---- Start menu path: rviz.cmd must bring up its own roscore when none runs ----
   # (dry run: everything rviz.cmd does except opening the rviz window)
-  Write-Host '[test-install] rviz.cmd auto-starts and stops roscore (launcher dry run)'
+  # The Start menu shortcut itself is executed (its exact target + arguments),
+  # with a deliberately broken cmd AutoRun in place: a stale conda/micromamba
+  # AutoRun makes every `cmd` without /d exit at once, which is how a Start menu
+  # launch can flash and close. The shortcut must be immune to it.
+  Write-Host '[test-install] Start menu RViz shortcut, with a broken cmd AutoRun, auto-starts and stops roscore (launcher dry run)'
+  $menu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+  $rvizLnk = Get-ChildItem -Path $menu -Recurse -Filter 'RViz.lnk' | Select-Object -First 1
+  Check $rvizLnk 'Start menu shortcut not found'
+  $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($rvizLnk.FullName)
+  Write-Host "[test-install]   shortcut: $($sc.TargetPath) $($sc.Arguments)"
+  Check ($sc.TargetPath -like '*\cmd.exe' -and (Test-Path -LiteralPath $sc.TargetPath)) "RViz shortcut does not start cmd.exe ($($sc.TargetPath))"
+  Check ($sc.Arguments -match '^/d /c ' -and $sc.Arguments -like "*$launchers\rviz.cmd*") "RViz shortcut arguments are not '/d /c ...rviz.cmd' ($($sc.Arguments))"
   Check (-not ((Invoke-Batch "call `"$launchers\rosnode.cmd`" list") -match '/rosout')) 'a ROS master is still running before the launcher test'
+  $autoRunKey = 'HKCU:\Software\Microsoft\Command Processor'
+  $oldAutoRun = (Get-ItemProperty -Path $autoRunKey -Name AutoRun -ErrorAction SilentlyContinue).AutoRun
+  if (-not (Test-Path $autoRunKey)) { New-Item -Path $autoRunKey -Force | Out-Null }
+  Set-ItemProperty -Path $autoRunKey -Name AutoRun -Value 'exit 1'
   $env:RVIZ_LAUNCHER_DRYRUN = '1'
-  try { $launch = Invoke-Batch "call `"$launchers\rviz.cmd`"" }
-  finally { Remove-Item env:RVIZ_LAUNCHER_DRYRUN -ErrorAction SilentlyContinue }
-  $launch | Set-Content "$LogDir\rviz-launcher.txt"
+  try {
+    $p = Start-Process -FilePath $sc.TargetPath -ArgumentList $sc.Arguments -Wait -PassThru -NoNewWindow `
+      -RedirectStandardOutput "$LogDir\rviz-launcher.txt" -RedirectStandardError "$LogDir\rviz-launcher.err.txt"
+    $launch = (Get-Content "$LogDir\rviz-launcher.txt", "$LogDir\rviz-launcher.err.txt" -Raw -ErrorAction SilentlyContinue) -join "`n"
+  }
+  finally {
+    Remove-Item env:RVIZ_LAUNCHER_DRYRUN -ErrorAction SilentlyContinue
+    if ($null -eq $oldAutoRun) { Remove-ItemProperty -Path $autoRunKey -Name AutoRun -ErrorAction SilentlyContinue }
+    else { Set-ItemProperty -Path $autoRunKey -Name AutoRun -Value $oldAutoRun }
+  }
   if (-not ($launch -match 'roscore is up')) { Write-Host $launch }
+  Check ($p.ExitCode -eq 0) "Start menu shortcut command exited with $($p.ExitCode) (see rviz-launcher*.txt)"
   Check ($launch -match 'starting roscore' -and $launch -match 'roscore is up') 'rviz.cmd did not start a local roscore (see rviz-launcher.txt)'
   Check ($launch -match 'dry run: rviz.exe not started') 'rviz.cmd did not reach the rviz.exe step'
   Check ($launch -match 'stopping the roscore it started') 'rviz.cmd did not stop the roscore it started'
+  $actLog = Join-Path $env:LOCALAPPDATA 'RVizNoetic\activate.log'
+  Check ((Test-Path -LiteralPath $actLog) -and ((Get-Content -LiteralPath $actLog -Raw) -match 'ros-noetic-catkin_activate\.bat')) "activation log not written ($actLog)"
   Start-Sleep -Seconds 3
   Check (-not ((Invoke-Batch "call `"$launchers\rosnode.cmd`" list") -match '/rosout')) 'roscore started by rviz.cmd is still running after it exited'
   # never leave bundled processes behind (they would lock files during uninstall)
@@ -158,8 +183,7 @@ try {
   $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
   Check ($machinePath -like "*$launchers*") 'launchers folder was not added to the system PATH'
 
-  $lnk = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
-  Check (Get-ChildItem -Path $lnk -Recurse -Filter 'RViz.lnk') 'Start menu shortcut not found'
+
 }
 catch { $failure = "$_" }
 finally {

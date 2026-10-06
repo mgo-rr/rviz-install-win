@@ -311,3 +311,10 @@ def test_rviz_launcher_auto_roscore(tmp_path):
     assert "if defined RVIZ_INTERACTIVE pause" in text
     assert 'if /i "%~1"=="--help" set "RVIZ_INTERACTIVE="' in text
     assert 'if "%RVIZ_NO_PAUSE%"=="1" set "RVIZ_INTERACTIVE="' in text
+    # activation hook output goes to a log, not to nul; the shell skips AutoRun
+    env = (tmp_path / "launchers" / "ros_env.bat").read_bytes().decode("ascii")
+    assert 'call :run_hook "%%~fF"' in env and ">nul 2>&1\r\n)" not in env
+    assert 'set "RVIZ_ACTIVATE_LOG=%RVIZ_LOG_DIR%\\activate.log"' in env
+    assert "Environment setup log: %RVIZ_ACTIVATE_LOG%" in text
+    shell = (tmp_path / "launchers" / "ros_shell.cmd").read_bytes().decode("ascii")
+    assert '"%ComSpec%" /d /k' in shell

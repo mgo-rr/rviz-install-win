@@ -44,6 +44,13 @@ REQUIRED_FILES = [
     "Library/share/rviz/plugin_description.xml",
     "Library/share/rviz/ogre_media",
     "Library/plugins/platforms/qwindows.dll",
+    # ROS environment chain run by launchers\ros_env.bat (same as RoboStack's
+    # activation). catkin's setup.bat does `exit 22` - closing the launcher's
+    # window without a message - if _setup_util.py is missing.
+    "etc/conda/activate.d/ros-noetic-catkin_activate.bat",
+    "Library/local_setup.bat",
+    "Library/setup.bat",
+    "Library/_setup_util.py",
 ]
 
 # ROS packages that must be present (Library/share/<pkg>/package.xml) for rviz
@@ -567,9 +574,15 @@ if /i "%RVIZ_ENV_ACTIVE%"=="%RVIZ_ROOT%" goto :ros_vars
 set "PATH=%RVIZ_ROOT%;%RVIZ_ROOT%\Library\mingw-w64\bin;%RVIZ_ROOT%\Library\usr\bin;%RVIZ_ROOT%\Library\bin;%RVIZ_ROOT%\Scripts;%RVIZ_ROOT%\bin;%RVIZ_ROOT%\DLLs;%RVIZ_ROOT%\Library\lib;%RVIZ_ROOT%\launchers;%PATH%"
 set "RVIZ_ENV_ACTIVE=%RVIZ_ROOT%"
 set "CONDA_PREFIX=%RVIZ_ROOT%"
-rem Run package activation hooks exactly like 'conda activate' would.
+rem Run package activation hooks exactly like 'conda activate' would. Their
+rem output goes to a log (conda shows it; a Start menu window would not).
+set "RVIZ_LOG_DIR=%LOCALAPPDATA%\RVizNoetic"
+if not defined LOCALAPPDATA set "RVIZ_LOG_DIR=%TEMP%\RVizNoetic"
+if not exist "%RVIZ_LOG_DIR%" mkdir "%RVIZ_LOG_DIR%" >nul 2>&1
+set "RVIZ_ACTIVATE_LOG=%RVIZ_LOG_DIR%\activate.log"
+(echo activation of %RVIZ_ROOT%) > "%RVIZ_ACTIVATE_LOG%" 2>nul || set "RVIZ_ACTIVATE_LOG=nul"
 if exist "%RVIZ_ROOT%\etc\conda\activate.d" (
-  for %%F in ("%RVIZ_ROOT%\etc\conda\activate.d\*.bat") do call "%%~fF" >nul 2>&1
+  for %%F in ("%RVIZ_ROOT%\etc\conda\activate.d\*.bat") do call :run_hook "%%~fF"
 )
 :ros_vars
 rem Authoritative ROS variables (override anything the hooks computed).
@@ -589,6 +602,11 @@ set "PYTHONDONTWRITEBYTECODE=1"
 set "QT_PLUGIN_PATH=%RVIZ_ROOT%\Library\plugins"
 set "RVIZ_OGRE_PLUGIN_DIR=%RVIZ_ROOT%\Library\bin"
 if not defined ROS_MASTER_URI set "ROS_MASTER_URI=http://localhost:11311"
+exit /b 0
+
+:run_hook
+>> "%RVIZ_ACTIVATE_LOG%" 2>&1 echo --- %~nx1
+call "%~1" >> "%RVIZ_ACTIVATE_LOG%" 2>&1
 exit /b 0
 """
 
@@ -660,14 +678,18 @@ if "%RC%"=="0" exit /b 0
 echo.
 echo [rviz] RViz exited with error code %RC%.
 echo [rviz] The messages above show why. RViz's own log files are in:
-if defined ROS_HOME (echo [rviz]   %ROS_HOME%\log) else (echo [rviz]   %USERPROFILE%\.ros\log)
+set "RH=%ROS_HOME%"
+if not defined RH set "RH=%USERPROFILE%\.ros"
+echo [rviz]   %RH%\log
 echo [rviz] A common cause is a missing or too old OpenGL graphics driver
 echo [rviz] (e.g. some remote desktop sessions and virtual machines).
+if defined RVIZ_ACTIVATE_LOG echo [rviz] Environment setup log: %RVIZ_ACTIVATE_LOG%
 if defined RVIZ_INTERACTIVE pause
 exit /b %RC%
 
 :env_failed
 echo [rviz] could not set up the ROS environment (launchers\ros_env.bat failed).
+if defined RVIZ_ACTIVATE_LOG echo [rviz] Environment setup log: %RVIZ_ACTIVATE_LOG%
 if not "%RVIZ_NO_PAUSE%"=="1" pause
 exit /b 1
 
@@ -722,7 +744,9 @@ title ROS Noetic shell (RViz bundle)
 echo ROS Noetic environment ready  [%RVIZ_ROOT%]
 echo   ROS_MASTER_URI=%ROS_MASTER_URI%
 echo   Commands: rviz, roscore, roslaunch, rostopic, rosnode, rosservice, rosparam, rospack
-"%ComSpec%" /k
+rem /d: do not run the user's cmd AutoRun (a stale conda/micromamba hook there
+rem makes every cmd exit at once).
+"%ComSpec%" /d /k
 """
 
 
