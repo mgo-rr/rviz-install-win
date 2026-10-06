@@ -168,6 +168,38 @@ try {
     $play = Invoke-Batch "call `"$launchers\rosbag.cmd`" play -q `"$bag`" 2>&1`r`necho rosbag-exit=%ERRORLEVEL%"
     Check ($play -match 'rosbag-exit=0') "rosbag play failed: $play"
 
+    # The Python player (used where Windows blocks play.exe, e.g. Smart App
+    # Control): a subscriber must receive all 5 messages and /clock.
+    Write-Host '[test-install] rosbag.cmd play with the Python player (RVIZ_BAG_PLAYER=python)'
+    $result = Join-Path $LogDir 'rosbag-python-player.txt'
+    $listener = Join-Path $LogDir 'bag_listener.py'
+    Set-Content -Path $listener -Encoding ASCII -Value @(
+      'import sys, time, rospy',
+      'from std_msgs.msg import String',
+      'from rosgraph_msgs.msg import Clock',
+      'got, clk = [], []',
+      'rospy.init_node("bag_listener", anonymous=True)',
+      'rospy.Subscriber("/rviz_msi_test", String, lambda m: got.append(m.data))',
+      'rospy.Subscriber("/clock", Clock, lambda m: clk.append(m.clock.to_sec()))',
+      'open(sys.argv[1] + ".ready", "w").close()',
+      'deadline = time.time() + 180',
+      'while time.time() < deadline and len(got) < 5:',
+      '    time.sleep(0.2)',
+      'open(sys.argv[1], "w").write("messages=%d clock=%d first_clock=%.0f\n" % (len(got), len(clk), clk[0] if clk else 0))')
+    Remove-Item "$result", "$result.ready" -ErrorAction SilentlyContinue
+    # (python.exe by full path: cmd expands %RVIZ_ROOT% on this line before ros_env.bat sets it)
+    $procs += Start-Process -FilePath cmd.exe -PassThru -WindowStyle Hidden -ArgumentList '/d', '/c', `
+      "`"call `"$launchers\ros_env.bat`" && `"$(Join-Path $Prefix 'python.exe')`" `"$listener`" `"$result`"`""
+    for ($i = 0; $i -lt 60 -and -not (Test-Path "$result.ready"); $i++) { Start-Sleep -Seconds 2 }
+    Check (Test-Path "$result.ready") 'bag listener did not start within 120 s'
+    $pyPlay = Invoke-Batch "set RVIZ_BAG_PLAYER=python`r`ncall `"$launchers\rosbag.cmd`" play --clock -d 10 `"$bag`" 2>&1`r`necho rosbag-exit=%ERRORLEVEL%"
+    ($pyPlay -split "`r?`n") | Where-Object { $_ -match 'Python player|Done' } | ForEach-Object { Write-Host "[test-install]   $($_.Trim())" }
+    Check ($pyPlay -match 'rosbag-exit=0') "Python player failed: $pyPlay"
+    for ($i = 0; $i -lt 30 -and -not (Test-Path $result); $i++) { Start-Sleep -Seconds 2 }
+    $heard = (Get-Content -LiteralPath $result -Raw -ErrorAction SilentlyContinue)
+    Write-Host "[test-install]   listener: $heard"
+    Check ($heard -match 'messages=5 ' -and $heard -match 'clock=[1-9]' -and $heard -match 'first_clock=17000000') "Python player: listener did not receive the bag's 5 messages and its /clock ($heard)"
+
     if ($SkipGui) {
       Write-Host '[test-install] -SkipGui: not opening the rviz window (roscore/rostopic checked above)'
     }

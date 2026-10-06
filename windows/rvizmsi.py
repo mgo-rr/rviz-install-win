@@ -113,7 +113,7 @@ MESA_OPTIONAL_DLLS = ["libglapi.dll"]          # older Mesa builds split this ou
 # rosbag: replay bag files from the Admin Portal into RViz (bag review).
 ROS_TOOLS = [
     "roscore", "roslaunch", "rostopic", "rosnode", "rosservice", "rosparam",
-    "rosmsg", "rossrv", "rospack", "rosbag",
+    "rosmsg", "rossrv", "rospack",
 ]
 
 
@@ -784,6 +784,25 @@ call "%~dp0rviz.cmd" %*
 exit /b %ERRORLEVEL%
 """
 
+ROSBAG_CMD = r"""@echo off
+rem ---------------------------------------------------------------------------
+rem rosbag.cmd - the bundled rosbag (bag review: rosbag info / rosbag play).
+rem "rosbag play" goes through rosbag_play.py: it runs play.exe and, where
+rem Windows blocks play.exe (Smart App Control), a Python player instead.
+rem RVIZ_BAG_PLAYER=python always uses the Python player.
+rem -W ignore::SyntaxWarning hides Python 3.12's warnings about old escape
+rem sequences in rosbag (shown on every run: the launchers keep no .pyc).
+rem ---------------------------------------------------------------------------
+setlocal
+call "%~dp0ros_env.bat" || exit /b 1
+if /i "%~1"=="play" goto play
+"%RVIZ_ROOT%\python.exe" -W ignore::SyntaxWarning "%RVIZ_ROOT%\Library\bin\rosbag" %*
+exit /b %ERRORLEVEL%
+:play
+"%RVIZ_ROOT%\python.exe" -W ignore::SyntaxWarning "%~dp0rosbag_play.py" %*
+exit /b %ERRORLEVEL%
+"""
+
 TOOL_SHIM = r"""@echo off
 rem {tool}.cmd - run the bundled ROS tool '{tool}' whether it was installed as
 rem .exe, .bat or an extension-less Python script. (goto, not blocks, so that
@@ -817,7 +836,7 @@ if /i "%~1"=="--home" cd /d "%USERPROFILE%"
 title ROS Noetic shell (RViz bundle)
 echo ROS Noetic environment ready  [%RVIZ_ROOT%]
 echo   ROS_MASTER_URI=%ROS_MASTER_URI%
-echo   Commands: rviz, roscore, roslaunch, rostopic, rosnode, rosservice, rosparam, rospack
+echo   Commands: rviz, rviz-software, roscore, roslaunch, rostopic, rosnode, rosservice, rosparam, rospack, rosbag
 rem /d: do not run the user's cmd AutoRun (a stale conda/micromamba hook there
 rem makes every cmd exit at once).
 "%ComSpec%" /d /k
@@ -836,6 +855,10 @@ def write_launchers(stage: Path, prefix: str) -> None:
     w("ros_env.bat", ROS_ENV_BAT.replace("{prefix}", prefix))
     w("rviz.cmd", RVIZ_CMD)
     w("rviz-software.cmd", RVIZ_SOFTWARE_CMD)
+    w("rosbag.cmd", ROSBAG_CMD)
+    # Python side of rosbag.cmd play (play.exe, or a Python player where
+    # Windows blocks play.exe); kept next to this script in the repository.
+    shutil.copy2(Path(__file__).with_name("rosbag_play.py"), d / "rosbag_play.py")
     w("ros_shell.cmd", ROS_SHELL_CMD)
     for tool in ROS_TOOLS:
         w(f"{tool}.cmd", TOOL_SHIM.replace("{tool}", tool))

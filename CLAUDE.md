@@ -45,7 +45,7 @@ Pipeline steps:
 
 ```
 pwsh -NoProfile -File tests/Test-Build.ps1     # 103 checks, stubbed tools, PS 5.1 + 7
-python -m pytest -q tests                      # 21 passed, 1 skipped (PE sample test needs Windows DLLs)
+python -m pytest -q tests                      # 25 passed, 1 skipped (PE sample test needs Windows DLLs)
 python tests/check_wxs_schema.py <wix-v5.0.2 source checkout>
 git -C <rviz 1.14.26 clone> apply --check patches/1.14.26/0001-windows-msvc-relocatable.patch
 ```
@@ -94,7 +94,7 @@ CI (`.github/workflows/ci.yml`, windows-2022):
 - `/d` does not reach child cmds: catkin's `setup.bat` uses `FOR /F`, whose subshell runs AutoRun. If AutoRun exits, `if 0 LSS  (` is a syntax error and the launcher dies with 255 and no output. `ros_env.bat` presets `_CATKIN_ENVIRONMENT_HOOKS_COUNT=0` to survive that (test-install sets `AutoRun=exit 1`).
 - Activation hook output goes to `%LOCALAPPDATA%\RVizNoetic\activate.log`.
 - Software rendering (`rviz-software.cmd`, Start menu *RViz (software rendering)*): conda `mesa-llvmpipe`. finalize moves Mesa's `opengl32.dll` + `libgallium_wgl.dll` from `Library\bin` to `Library\mesa` next to a copy of `rviz.exe` (+ `qt.conf`); Windows loads opengl32 from the exe's folder first, so Mesa next to `Library\bin\rviz.exe` would replace the GPU driver for everyone (finalize refuses that). OGRE 1.10 loads plugins with `LoadLibraryEx(name, NULL, 0)` (standard search), so `RenderSystem_GL.dll` stays in `Library\bin`. test-install opens a real rviz window with it on CI and checks the loaded `opengl32.dll` path.
-- `rosbag.cmd` (TOOL_SHIM runs the extension-less `Library\bin\rosbag` script with the bundled python) is for bag review: roscore shortcut, `rosparam set use_sim_time true`, `rviz`, then `rosbag play --clock --pause <_0.bag> <_1.bag>` (README "Reviewing a bag file"). test-install writes a bz2-chunked bag (the Admin Portal's requested-bag format) and runs `rosbag info` + `play`. The ops RViz layout (`savibot_vis/config/ops_rviz_simplified.rviz`, private `savioke/relay-ros`) is not shipped in this public repo.
+- `rosbag.cmd` (TOOL_SHIM runs the extension-less `Library\bin\rosbag` script with the bundled python) is for bag review: roscore shortcut, `rosparam set use_sim_time true`, `rviz`, then `rosbag play --clock --pause <_0.bag> <_1.bag>` (README "Reviewing a bag file"). `rosbag.cmd play` goes through `launchers\rosbag_play.py` (source `windows/rosbag_play.py`): it runs `rosbag play` (RoboStack's unsigned `Library\lib\rosbag\play.exe`) and, on WinError 4551/1260 (Smart App Control blocks play.exe; seen on a teammate's personal Windows 11 laptop where rviz.exe and python.exe ran), falls back to a Python player that publishes raw bytes with the bag's types and latching plus `/clock`. `RVIZ_BAG_PLAYER=python` forces it. test-install writes a bz2-chunked bag (the Admin Portal's requested-bag format), runs `rosbag info` + `play`, and checks a listener gets all 5 messages and `/clock` from the forced Python player. The ops RViz layout (`savibot_vis/config/ops_rviz_simplified.rviz`, private `savioke/relay-ros`) is not shipped in this public repo.
 - Never use `timeout` in launchers (it fails without a console); use `ping -n 2 127.0.0.1`.
 
 **CI quirks:**

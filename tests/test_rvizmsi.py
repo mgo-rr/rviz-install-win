@@ -383,3 +383,74 @@ def test_rviz_patch_exports_property_classes():
     for header, cls in PROPERTY_CLASSES_NEEDING_EXPORT.items():
         assert f"+++ b/src/rviz/properties/{header}" in patch, header
         assert f"+class RVIZ_EXPORT {cls} : public" in patch, cls
+
+
+# --- rosbag play: play.exe, or the Python player where Windows blocks it ----
+import importlib.util  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location("rosbag_play", REPO / "windows" / "rosbag_play.py")
+rosbag_play = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(rosbag_play)
+
+
+def test_rosbag_play_parse_args():
+    a = rosbag_play.parse_args(["--clock", "--pause", "-r", "0.5", "-s", "60", "a_0.bag", "a_1.bag"])
+    assert a.clock and a.pause and a.rate == 0.5 and a.start == 60 and a.bagfiles == ["a_0.bag", "a_1.bag"]
+    a = rosbag_play.parse_args(["--topics", "/tf", "/scan", "--bags", "x.bag"])
+    assert a.topics == ["/tf", "/scan"] and a.bagfiles == ["x.bag"]
+    for bad in (["--immediate", "x.bag"], [], ["-r", "0", "x.bag"]):
+        with pytest.raises(SystemExit):
+            rosbag_play.parse_args(bad)
+
+
+def test_rosbag_play_latching_flag():
+    assert rosbag_play.header_flag({"latching": b"1"}, "latching")
+    assert rosbag_play.header_flag({"latching": "1"}, "latching")
+    assert not rosbag_play.header_flag({"latching": b"0"}, "latching")
+    assert not rosbag_play.header_flag({}, "latching")
+
+
+def _fake_rosbag(monkeypatch, error):
+    import types
+    calls = []
+
+    def rosbagmain(argv):
+        calls.append(argv)
+        if error:
+            raise error
+    monkeypatch.setitem(sys.modules, "rosbag", types.SimpleNamespace(rosbagmain=rosbagmain))
+    played = []
+    monkeypatch.setattr(rosbag_play, "python_play", lambda args: played.append(args.bagfiles))
+    return calls, played
+
+
+def test_rosbag_play_falls_back_only_when_windows_blocks_play_exe(monkeypatch):
+    monkeypatch.delenv("RVIZ_BAG_PLAYER", raising=False)
+    blocked = OSError(22, "An Application Control policy has blocked this file")
+    blocked.winerror = 4551
+    calls, played = _fake_rosbag(monkeypatch, blocked)
+    assert rosbag_play.main(["play", "--clock", "x.bag"]) == 0
+    assert calls == [["rosbag", "play", "--clock", "x.bag"]] and played == [["x.bag"]]
+    # play.exe works: no Python player
+    calls, played = _fake_rosbag(monkeypatch, None)
+    rosbag_play.main(["play", "x.bag"])
+    assert calls and not played
+    # any other error is not hidden
+    other = OSError(2, "not found")
+    other.winerror = 2
+    _fake_rosbag(monkeypatch, other)
+    with pytest.raises(OSError):
+        rosbag_play.main(["play", "x.bag"])
+    # RVIZ_BAG_PLAYER=python skips play.exe
+    monkeypatch.setenv("RVIZ_BAG_PLAYER", "python")
+    calls, played = _fake_rosbag(monkeypatch, None)
+    rosbag_play.main(["play", "x.bag"])
+    assert not calls and played == [["x.bag"]]
+
+
+def test_rosbag_launcher(tmp_path):
+    rvizmsi.write_launchers(tmp_path, r"C:\opt\rviz\noetic")
+    cmd = (tmp_path / "launchers" / "rosbag.cmd").read_bytes().decode("ascii")
+    assert 'if /i "%~1"=="play" goto play' in cmd
+    assert '"%~dp0rosbag_play.py" %*' in cmd and "-W ignore::SyntaxWarning" in cmd
+    assert (tmp_path / "launchers" / "rosbag_play.py").read_text() == (REPO / "windows/rosbag_play.py").read_text()

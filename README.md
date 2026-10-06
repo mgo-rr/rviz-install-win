@@ -287,6 +287,13 @@ camera images, maps, planned paths, dock detection.
    `--pause` starts paused: press Space in this window to play or pause and
    `s` to step. `-r 0.5` plays at half speed, `-s 60` starts 60 s in.
 
+   On PCs with **Smart App Control** (Windows 11), Windows blocks RoboStack's
+   `play.exe` ("An Application Control policy has blocked this file").
+   `rosbag play` then says so and continues with a bundled Python player,
+   which supports the options above plus `-u` (duration), `-l` (loop), `-k`
+   (keep alive), `-d` (delay) and `--topics`. Set `RVIZ_BAG_PLAYER=python` to
+   always use it.
+
 In RViz, set *Fixed Frame* to `map` and add displays by topic (*Add > By
 topic*), or open a saved layout with *File > Open Config*. A display stays
 empty if its topic was not recorded in that bag (`rosbag info` lists the
