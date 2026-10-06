@@ -1,0 +1,129 @@
+name: RoboStack rviz check
+
+# Does RoboStack's OWN prebuilt ros-noetic-rviz (win-64) start on a GitHub
+# Windows runner? Our MSI's rviz.exe crashes at start-up with 0xC0000005 in
+# Qt5Core_conda.dll (QObjectPrivate::connectImpl, offset 0x1e1922) - on the
+# KVM VM with D3D12 OpenGL and on CI with Mesa llvmpipe. If RoboStack's binary
+# (same 1.14.26, same _24 package generation) crashes the same way, the bug is
+# upstream (rviz / RoboStack on Windows, cf. RoboStack/ros-noetic#534), not in
+# our build.
+#
+# Mesa llvmpipe (conda-forge mesa-llvmpipe) puts opengl32.dll into
+# Library\bin, next to RoboStack's rviz.exe, so that rviz renders on the CPU;
+# the runner has no GPU. Manual (gh workflow run robostack-rviz-check.yml, once
+# this file is on main), and on pushes to the software-rendering branch that
+# change this file, since workflow_dispatch only works from the default branch.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/software-rendering]
+    paths: ['.github/workflows/robostack-rviz-check.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  rviz:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RS: C:\rs
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: micromamba (version and SHA-256 from config/build.psd1)
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RS\logs" | Out-Null
+          $cfg = Import-PowerShellDataFile config/build.psd1
+          $mm = "$env:RS\micromamba.exe"
+          Invoke-WebRequest -UseBasicParsing -OutFile $mm `
+            "https://github.com/mamba-org/micromamba-releases/releases/download/$($cfg.MicromambaVersion)/micromamba-win-64"
+          $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $mm).Hash.ToLowerInvariant()
+          if ($h -ne $cfg.MicromambaSha256) { throw "micromamba SHA-256 mismatch: $h" }
+
+      - name: RoboStack rviz environment
+        run: |
+          $mm = "$env:RS\micromamba.exe"
+          & $mm create -y -q -r "$env:RS\root" -p "$env:RS\env" --override-channels `
+            -c robostack-noetic -c conda-forge --strict-channel-priority `
+            'ros-noetic-rviz=1.14.26' ros-noetic-roslaunch ros-noetic-rosnode 'python=3.12.*' mesa-llvmpipe
+          if ($LASTEXITCODE) { throw "micromamba create failed ($LASTEXITCODE)" }
+          & $mm list -r "$env:RS\root" -p "$env:RS\env" |
+            Select-String -Pattern '^\s*(ros-noetic-rviz|ros-noetic-class-loader|ros-noetic-pluginlib|qt-main|ogre|mesa-llvmpipe|python)\s' |
+            ForEach-Object { $_.Line.Trim() }
+          Get-ChildItem "$env:RS\env\Library\bin" -Filter 'opengl32.dll' | ForEach-Object { "Mesa next to rviz.exe: $($_.FullName)" }
+
+      - name: roscore + RoboStack's rviz (Mesa llvmpipe)
+        run: |
+          $mm = "$env:RS\micromamba.exe"
+          $run = @('run', '-r', "$env:RS\root", '-p', "$env:RS\env")
+          $logs = "$env:RS\logs"
+          $env:ROS_HOME = "$env:RS\ros_home"
+          $env:ROS_MASTER_URI = 'http://localhost:11311'
+          $env:GALLIUM_DRIVER = 'llvmpipe'
+          $procs = @()
+          try {
+            $procs += Start-Process -FilePath $mm -ArgumentList ($run + 'roscore') -PassThru -NoNewWindow `
+              -RedirectStandardOutput "$logs\roscore.out.txt" -RedirectStandardError "$logs\roscore.err.txt"
+            $up = $false
+            for ($i = 0; $i -lt 60 -and -not $up; $i++) {
+              Start-Sleep -Seconds 2
+              $up = (& $mm @run rosnode list 2>&1 | Out-String) -match '/rosout'
+            }
+            if (-not $up) { Get-Content "$logs\roscore.out.txt", "$logs\roscore.err.txt"; throw 'roscore did not come up' }
+            Write-Host 'roscore is up'
+
+            $start = Get-Date
+            $procs += Start-Process -FilePath $mm -ArgumentList ($run + 'rviz') -PassThru -NoNewWindow `
+              -RedirectStandardOutput "$logs\rviz.out.txt" -RedirectStandardError "$logs\rviz.err.txt"
+            Start-Sleep -Seconds 60
+            $rv = Get-Process -Name rviz -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($rv) {
+              Write-Host "RESULT: RoboStack's rviz is still running after 60 s ($($rv.Path))"
+              $gl = @($rv.Modules | Where-Object { $_.ModuleName -eq 'opengl32.dll' } | ForEach-Object { $_.FileName })
+              Write-Host "opengl32.dll loaded from: $($gl -join ', ')"
+              Write-Host "ROS nodes: $((& $mm @run rosnode list 2>&1 | Out-String).Trim() -replace "`r?`n", ' ')"
+              $crashed = $false
+            }
+            else {
+              Write-Host "RESULT: RoboStack's rviz EXITED within 60 s"
+              $crashed = $true
+              Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; StartTime = $start } -MaxEvents 3 -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "---- crash at $($_.TimeCreated.ToString('HH:mm:ss'))"; ($_.Message -split "`r?`n" | Select-Object -First 9) | ForEach-Object { Write-Host "  $_" } }
+              $cdb = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe"
+              if (Test-Path -LiteralPath $cdb) {
+                # same environment as the crash: run cdb through micromamba run
+                Set-Content -Path "$env:RS\cdb.cmd" -Encoding ASCII -Value (
+                  "@echo off`r`n`"$cdb`" -g -G -c `".ecxr; kn 40; lm; q`" `"%CONDA_PREFIX%\Library\bin\rviz.exe`" > `"$logs\rviz-cdb.txt`" 2>&1")
+                $p = Start-Process -FilePath $mm -ArgumentList ($run + @('cmd.exe', '/d', '/c', "$env:RS\cdb.cmd")) -PassThru -WindowStyle Hidden
+                if (-not $p.WaitForExit(180000)) { & cmd.exe /d /c "taskkill /T /F /PID $($p.Id) >nul 2>&1"; Write-Host '(no crash under cdb within 180 s)' }
+                if (Test-Path "$logs\rviz-cdb.txt") {
+                  $t = Get-Content "$logs\rviz-cdb.txt"
+                  $from = [Math]::Max(0, ($t | Select-String -Pattern 'Access violation' | Select-Object -First 1).LineNumber - 3)
+                  Write-Host '---- cdb ----'
+                  $t | Select-Object -Skip $from | Where-Object { $_ -notmatch '^\s*$' } | Select-Object -First 120 | ForEach-Object { Write-Host "  $_" }
+                }
+              }
+              else { Write-Host '(cdb.exe not found)' }
+            }
+            Write-Host '---- rviz output ----'
+            Get-Content "$logs\rviz.out.txt", "$logs\rviz.err.txt" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
+            if ($crashed) { throw "RoboStack's prebuilt rviz crashed too (see above)" }
+          }
+          finally {
+            foreach ($p in $procs) { & cmd.exe /d /c "taskkill /T /F /PID $($p.Id) >nul 2>&1" }
+            Get-Process -Name rviz, rosmaster, rosout -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: robostack-rviz-logs
+          path: |
+            C:\rs\logs\
+            C:\rs\ros_home\log\
+          if-no-files-found: warn
