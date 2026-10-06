@@ -581,6 +581,12 @@ if not defined LOCALAPPDATA set "RVIZ_LOG_DIR=%TEMP%\RVizNoetic"
 if not exist "%RVIZ_LOG_DIR%" mkdir "%RVIZ_LOG_DIR%" >nul 2>&1
 set "RVIZ_ACTIVATE_LOG=%RVIZ_LOG_DIR%\activate.log"
 (echo activation of %RVIZ_ROOT%) > "%RVIZ_ACTIVATE_LOG%" 2>nul || set "RVIZ_ACTIVATE_LOG=nul"
+rem catkin's setup.bat reads _CATKIN_ENVIRONMENT_HOOKS_COUNT from a FOR /F
+rem subshell, which runs cmd AutoRun even though we were started with /d. If
+rem AutoRun exits, the count stays undefined, `if 0 LSS  (` is a syntax error
+rem and cmd aborts every batch level with exit code 255 and no output. A
+rem default of 0 keeps going; the ROS variables below are set either way.
+set "_CATKIN_ENVIRONMENT_HOOKS_COUNT=0"
 if exist "%RVIZ_ROOT%\etc\conda\activate.d" (
   for %%F in ("%RVIZ_ROOT%\etc\conda\activate.d\*.bat") do call :run_hook "%%~fF"
 )
