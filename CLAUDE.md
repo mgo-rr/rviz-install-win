@@ -30,7 +30,7 @@ Pipeline steps:
 
 ## Conventions
 
-- Commit author: `Mahalalel Dan Go <mgo@relayrobotics.com>`.
+- Commit author and committer: `Robo Care Support Team <support@relayrobotics.com>` (public repo: no personal details; set in the repo-local git config). Earlier commits keep Mahal's personal address (history is not rewritten).
 - Multi-line commit messages via a quoted heredoc (`git commit -F - <<'MSG'`), never `-m`.
 - Messages explain why, what was tried and what is still unproven.
 - End every commit message with:
@@ -90,6 +90,7 @@ CI (`.github/workflows/ci.yml`, windows-2022):
 - `rviz.cmd` auto-starts a local roscore only for the default `localhost:11311` master and stops only the one it started (PID from `%ROS_HOME%\roscore-11311.pid`).
 - It keeps the window open on failure (skipped for `--help` and `RVIZ_NO_PAUSE=1`).
 - Shortcuts run `cmd.exe /d /c ""<launcher>""`. `/d` skips cmd AutoRun; a stale conda/micromamba AutoRun makes every plain `cmd` exit at once.
+- `/d` does not reach child cmds: catkin's `setup.bat` uses `FOR /F`, whose subshell runs AutoRun. If AutoRun exits, `if 0 LSS  (` is a syntax error and the launcher dies with 255 and no output. `ros_env.bat` presets `_CATKIN_ENVIRONMENT_HOOKS_COUNT=0` to survive that (test-install sets `AutoRun=exit 1`).
 - Activation hook output goes to `%LOCALAPPDATA%\RVizNoetic\activate.log`.
 - Never use `timeout` in launchers (it fails without a console); use `ping -n 2 127.0.0.1`.
 
@@ -106,7 +107,9 @@ CI (`.github/workflows/ci.yml`, windows-2022):
 
 ## Current state / next steps (2026-10-06)
 
-- Releases: `v1.14.26-1`, `v1.14.26-2`. The next release `v1.14.26-3` should include the launcher hardening (window stays open, `cmd /d` shortcuts, activation log). Tag it after `main` CI is green.
-- Open issue: a teammate's Start menu RViz (Windows 11, v1.14.26-1) flashed and closed. Suspected cause: a stale cmd AutoRun. Waiting for `reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun` (and HKLM).
+- Releases: `v1.14.26-1`, `v1.14.26-2`, `v1.14.26-3`. `-3` ships the launcher hardening: window stays open, `cmd /d` shortcuts, activation log, and the `_CATKIN_ENVIRONMENT_HOOKS_COUNT` fix for an AutoRun that exits.
+- Open issue: a teammate's Start menu RViz (Windows 11, v1.14.26-1) flashed and closed. Suspected cause: a stale cmd AutoRun. Waiting for `reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun` (and HKLM). Ask them to retry with `v1.14.26-3`.
+- Open question: the same teammate reported the installer "asked for installation with Conda". Nothing in the MSI or launchers does that (the license screen only mentions RoboStack / conda-forge). Waiting for a screenshot or the exact wording.
 - Not yet verified on a real PC with a GPU: the rviz window itself, opened from the Start menu.
-- Benchmark: run `gh workflow run env-benchmark.yml` and read the summary table. Switching from micromamba only pays off if the difference is significant; the rest of the build takes about 24 min whichever tool is used.
+- The MSI is not code-signed in CI, so Windows SmartScreen warns on first run.
+- Env benchmark (run 37421285797, windows-2022, one sample each), total cold seconds: micromamba 218, pixi via prefix.dev 223, conda (Miniforge) 307, pixi via conda.anaconda.org 504. Same python/ogre/qt/libblas/roscpp builds; pixi installs 297 packages vs 299 (difference not checked). Decision: stay on micromamba. The download host matters more than the tool.
