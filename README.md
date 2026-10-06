@@ -68,13 +68,20 @@ stops the build with the step name on a non-zero exit code.
 ### Why RoboStack + a patch?
 
 rviz needs about 100 ROS/Qt5/OGRE 1.10/Boost libraries. RoboStack publishes
-these for `win-64`, built with MSVC, and its own `ros-noetic-rviz` win-64
-package proves the toolchain works. rviz itself is compiled from the GitHub
-source. The patch (`patches\1.14.26\0001-windows-msvc-relocatable.patch`) is
+these for `win-64`, built with MSVC. rviz itself is compiled from the GitHub
+source. (RoboStack's own win-64 `ros-noetic-rviz` 1.14.26 builds, but crashes
+at start-up; see the export fix below.) The patch (`patches\1.14.26\0001-windows-msvc-relocatable.patch`) is
 based on RoboStack's Windows patch:
 
-* MSVC fixes: `NOGDI`, `RVIZ_EXPORT` on `EnumProperty`, sip `.pyd` naming,
-  OpenGL lookup, OGRE 1.10 font definition.
+* MSVC fixes: `NOGDI`, sip `.pyd` naming, OpenGL lookup, OGRE 1.10 font
+  definition.
+* **`RVIZ_EXPORT` on every property class with a templated constructor**
+  (`String`, `Float`, `Int`, `Color`, `Quaternion`, `Enum`, `EditableEnum`,
+  `DisplayVisibility`, `DisplayGroupVisibility`). Without it MSVC compiles
+  those constructors into the plugin DLL with an import stub's address as the
+  vtable, and rviz crashes at start-up (0xC0000005 in Qt's `connect`, from
+  `InitialPoseTool`). RoboStack's patch only exports `EnumProperty`, and its
+  prebuilt rviz 1.14.26 crashes the same way (cf. RoboStack/ros-noetic#534).
 * **Relocatable OGRE plugins.** Upstream bakes the build machine's plugin
   path into `rviz.exe`. The patched lookup order is `RVIZ_OGRE_PLUGIN_DIR`,
   then `CONDA_PREFIX`, then the compiled-in path.

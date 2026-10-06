@@ -45,7 +45,7 @@ Pipeline steps:
 
 ```
 pwsh -NoProfile -File tests/Test-Build.ps1     # 103 checks, stubbed tools, PS 5.1 + 7
-python -m pytest -q tests                      # 20 passed, 1 skipped (PE sample test needs Windows DLLs)
+python -m pytest -q tests                      # 21 passed, 1 skipped (PE sample test needs Windows DLLs)
 python tests/check_wxs_schema.py <wix-v5.0.2 source checkout>
 git -C <rviz 1.14.26 clone> apply --check patches/1.14.26/0001-windows-msvc-relocatable.patch
 ```
@@ -77,6 +77,7 @@ CI (`.github/workflows/ci.yml`, windows-2022):
 - OGRE bare library names
 - `yaml-cpp::yaml-cpp` (0.8.0 config bug)
 - Boost lib dir for the sip/qmake link (header autolinking)
+- `RVIZ_EXPORT` on every property class with a templated constructor (String, Float, Int, Color, Quaternion, Enum, EditableEnum, DisplayVisibility, DisplayGroupVisibility). Otherwise MSVC compiles the constructor into rviz_default_plugin with the import thunk's address as vtable, and rviz.exe crashes at start-up: 0xC0000005 in `Qt5Core_conda!QObjectPrivate::connectImpl+0x2b2` (offset 0x1e1922) from `rviz::InitialPoseTool::InitialPoseTool`. Releases v1.14.26-1..-4 and RoboStack's own win-64 rviz 1.14.26 build 24 have this crash (proved with `robostack-rviz-check.yml` + cdb). pytest guards the hunks.
 
 **Packages:**
 
@@ -112,6 +113,6 @@ CI (`.github/workflows/ci.yml`, windows-2022):
 - Open issue: a teammate's Start menu RViz (Windows 11, v1.14.26-1) flashed and closed. Suspected cause: a stale cmd AutoRun. Waiting for `reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun` (and HKLM). Ask them to retry with `v1.14.26-3`.
 - Open question: the same teammate reported the installer "asked for installation with Conda". Nothing in the MSI or launchers does that (the license screen only mentions RoboStack / conda-forge). Waiting for a screenshot or the exact wording.
 - Not yet verified on a real PC with a GPU: the rviz window itself, opened from the Start menu.
-- QEMU/KVM Win11 VM (virtio 3D, which gives Windows guests no OpenGL): `rviz.exe` crashes with 0xC0000005 (-1073741819). With Microsoft's OpenCL/OpenGL/Vulkan Compatibility Pack it reaches `OpenGl version: 4.6` (D3D12 / Microsoft Basic Render Driver) and then crashes too, cause unknown (faulting module not yet collected). Hence the software-rendering shortcut.
+- QEMU/KVM Win11 VM (virtio 3D, which gives Windows guests no OpenGL): no OpenGL at all, hence the software-rendering shortcut. The crash seen there even with OpenGL (Microsoft's Compatibility Pack, D3D12) was the export bug above, not the driver.
 - Code signing (from v1.14.26-4): internal self-signed cert `certs/robo-care-code-signing.cer` (SHA-1 `F8CB7F5A10EBE5DDC4F2CDCBCE3598E0FF97899F`, valid to 2031-10-06). CI secrets `SIGN_PFX_BASE64` / `SIGN_PFX_PASSWORD`; a `v*` tag fails without them. The private key exists only in those secrets and in one backup kept by the Robo Care Team; never recreate, move or delete it without asking Mahal. IT must deploy the .cer to Root + TrustedPublisher (docs/code-signing.md). SmartScreen can still warn on browser downloads; Intune deployment avoids it.
 - Env benchmark (run 37421285797, windows-2022, one sample each), total cold seconds: micromamba 218, pixi via prefix.dev 223, conda (Miniforge) 307, pixi via conda.anaconda.org 504. Same python/ogre/qt/libblas/roscpp builds; pixi installs 297 packages vs 299 (difference not checked). Decision: stay on micromamba. The download host matters more than the tool.

@@ -12,6 +12,16 @@ Derived from RoboStack's ros-noetic-rviz.patch
     YAML_CPP_LIBRARIES to a bare "yaml-cpp" (LNK1181 yaml-cpp.lib).
   * sip bindings (MSVC): add Boost's library directory to the sip/qmake
     link, which Boost's header auto-linking needs (LNK1104 boost_thread.lib).
+  * RVIZ_EXPORT on every property class with a templated (header-inline)
+    constructor: String, Float, Int, Color, Quaternion, EditableEnum,
+    DisplayVisibility and DisplayGroupVisibility (Enum was already in
+    RoboStack's patch). Without it, MSVC compiles those constructors into
+    the plugin DLL with the vtable address of the import thunk instead of
+    the real vtable, and the first virtual call crashes: rviz.exe dies at
+    start-up with 0xC0000005 in QObjectPrivate::connectImpl, called from
+    rviz::InitialPoseTool::InitialPoseTool (RoboStack's own win-64
+    ros-noetic-rviz 1.14.26 build 24 crashes the same way; cf.
+    RoboStack/ros-noetic#534).
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index b1cd592..7c62956 100644
@@ -227,6 +237,58 @@ index 4005f98..1c02157 100644
  #ifdef Q_OS_MAC
    plugin_prefix += "lib";
  #endif
+diff --git a/src/rviz/properties/color_property.h b/src/rviz/properties/color_property.h
+index 6218586..8793f54 100644
+--- a/src/rviz/properties/color_property.h
++++ b/src/rviz/properties/color_property.h
+@@ -37,7 +37,7 @@
+ 
+ namespace rviz
+ {
+-class ColorProperty : public Property
++class RVIZ_EXPORT ColorProperty : public Property
+ {
+   Q_OBJECT
+ public:
+diff --git a/src/rviz/properties/display_group_visibility_property.h b/src/rviz/properties/display_group_visibility_property.h
+index 29641a4..c0d9389 100644
+--- a/src/rviz/properties/display_group_visibility_property.h
++++ b/src/rviz/properties/display_group_visibility_property.h
+@@ -54,7 +54,7 @@ class DisplayVisibilityProperty;
+  * Manages the visibility of all displays in a display group
+  * by switching one bit in Ogre's visibility mask.
+  */
+-class DisplayGroupVisibilityProperty : public DisplayVisibilityProperty
++class RVIZ_EXPORT DisplayGroupVisibilityProperty : public DisplayVisibilityProperty
+ {
+   Q_OBJECT
+ public:
+diff --git a/src/rviz/properties/display_visibility_property.h b/src/rviz/properties/display_visibility_property.h
+index 8e03bb9..6de02a4 100644
+--- a/src/rviz/properties/display_visibility_property.h
++++ b/src/rviz/properties/display_visibility_property.h
+@@ -52,7 +52,7 @@ class DisplayVisibilityProperty;
+ /*
+  * @brief Changes one visibility bit of a given Display
+  */
+-class DisplayVisibilityProperty : public BoolProperty
++class RVIZ_EXPORT DisplayVisibilityProperty : public BoolProperty
+ {
+   Q_OBJECT
+ public:
+diff --git a/src/rviz/properties/editable_enum_property.h b/src/rviz/properties/editable_enum_property.h
+index 18bfa1e..8286bb2 100644
+--- a/src/rviz/properties/editable_enum_property.h
++++ b/src/rviz/properties/editable_enum_property.h
+@@ -40,7 +40,7 @@ namespace rviz
+  * An editable enum property works like a string property, but with
+  * the addition of a drop-down list of predefined choices.
+  */
+-class EditableEnumProperty : public StringProperty
++class RVIZ_EXPORT EditableEnumProperty : public StringProperty
+ {
+   Q_OBJECT
+ public:
 diff --git a/src/rviz/properties/enum_property.h b/src/rviz/properties/enum_property.h
 index c3e5e87..5e29c42 100644
 --- a/src/rviz/properties/enum_property.h
@@ -237,6 +299,58 @@ index c3e5e87..5e29c42 100644
   */
 -class EnumProperty : public StringProperty
 +class RVIZ_EXPORT EnumProperty : public StringProperty
+ {
+   Q_OBJECT
+ public:
+diff --git a/src/rviz/properties/float_property.h b/src/rviz/properties/float_property.h
+index b8db9f9..a333541 100644
+--- a/src/rviz/properties/float_property.h
++++ b/src/rviz/properties/float_property.h
+@@ -34,7 +34,7 @@
+ namespace rviz
+ {
+ /** @brief Property specialized to enforce floating point max/min. */
+-class FloatProperty : public Property
++class RVIZ_EXPORT FloatProperty : public Property
+ {
+   Q_OBJECT
+ public:
+diff --git a/src/rviz/properties/int_property.h b/src/rviz/properties/int_property.h
+index 1a68486..2605dee 100644
+--- a/src/rviz/properties/int_property.h
++++ b/src/rviz/properties/int_property.h
+@@ -34,7 +34,7 @@
+ namespace rviz
+ {
+ /** @brief Property specialized to provide max/min enforcement for integers. */
+-class IntProperty : public Property
++class RVIZ_EXPORT IntProperty : public Property
+ {
+   Q_OBJECT
+ public:
+diff --git a/src/rviz/properties/quaternion_property.h b/src/rviz/properties/quaternion_property.h
+index 3fc1643..c5799f8 100644
+--- a/src/rviz/properties/quaternion_property.h
++++ b/src/rviz/properties/quaternion_property.h
+@@ -35,7 +35,7 @@
+ 
+ namespace rviz
+ {
+-class QuaternionProperty : public Property
++class RVIZ_EXPORT QuaternionProperty : public Property
+ {
+   Q_OBJECT
+ public:
+diff --git a/src/rviz/properties/string_property.h b/src/rviz/properties/string_property.h
+index 9311cf3..0c382af 100644
+--- a/src/rviz/properties/string_property.h
++++ b/src/rviz/properties/string_property.h
+@@ -36,7 +36,7 @@
+ namespace rviz
+ {
+ /** @brief Property specialized for string values. */
+-class StringProperty : public Property
++class RVIZ_EXPORT StringProperty : public Property
  {
    Q_OBJECT
  public:

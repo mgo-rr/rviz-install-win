@@ -362,3 +362,24 @@ def test_rviz_software_launcher(tmp_path):
     assert 'set "RVIZ_EXE=%RVIZ_ROOT%\\Library\\mesa\\rviz.exe"' in text
     assert '"%RVIZ_EXE%" %*' in text and "Library\\bin\\rviz.exe\" %*" not in text
     assert "use Start menu - RViz (software rendering)" in text
+
+
+# rviz 1.14 gave these property classes templated (header-inline) constructors.
+# Unless the class is RVIZ_EXPORT (dllimport in plugins), MSVC compiles the
+# constructor into the plugin with the import thunk's address as the vtable and
+# rviz.exe crashes at start-up in QObjectPrivate::connectImpl.
+PROPERTY_CLASSES_NEEDING_EXPORT = {
+    "string_property.h": "StringProperty", "float_property.h": "FloatProperty",
+    "int_property.h": "IntProperty", "color_property.h": "ColorProperty",
+    "quaternion_property.h": "QuaternionProperty", "enum_property.h": "EnumProperty",
+    "editable_enum_property.h": "EditableEnumProperty",
+    "display_visibility_property.h": "DisplayVisibilityProperty",
+    "display_group_visibility_property.h": "DisplayGroupVisibilityProperty",
+}
+
+
+def test_rviz_patch_exports_property_classes():
+    patch = (REPO / "patches/1.14.26/0001-windows-msvc-relocatable.patch").read_text(encoding="utf-8")
+    for header, cls in PROPERTY_CLASSES_NEEDING_EXPORT.items():
+        assert f"+++ b/src/rviz/properties/{header}" in patch, header
+        assert f"+class RVIZ_EXPORT {cls} : public" in patch, cls
