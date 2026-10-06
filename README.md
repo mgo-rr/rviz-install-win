@@ -25,6 +25,12 @@ Most users only need the finished installer:
 3. Double-click the MSI (administrator rights are needed), then open
    **Start menu > RViz (ROS Noetic) > RViz**. See [Using RViz](#using-rviz).
 
+From v1.14.26-4 on, the MSI is signed with the Robo Care Team's internal
+code-signing certificate. Windows shows the publisher as verified only on PCs
+where IT (or you) installed [`certs/robo-care-code-signing.cer`](certs/robo-care-code-signing.cer);
+SmartScreen may still warn on a browser download. See
+[docs/code-signing.md](docs/code-signing.md).
+
 Releases are published by CI from version tags (see
 [Publishing a release](#publishing-a-release)); every MSI there passed the
 full build and the install / run / uninstall test. No GitHub account is
@@ -259,6 +265,8 @@ config\build-only-packages.txt  stripped from the payload after the build
 config\prune.txt              glob patterns removed from the payload
 patches\1.14.26\              source patches applied to that rviz version
 tests\                        PowerShell dry run, pytest, WiX schema check
+certs\robo-care-code-signing.cer  public part of the internal MSI signing certificate
+docs\code-signing.md          certificate deployment (Intune / GPO), CI signing, renewal
 .github\workflows\ci.yml       GitHub Actions: checks + full build on windows-2022
 PSScriptAnalyzerSettings.psd1 lint settings
 ```
@@ -302,7 +310,9 @@ git tag -a v1.14.26-1 -m "RViz 1.14.26 installer, build 1"
 git push origin v1.14.26-1
 ```
 
-CI builds and test-installs the MSI as usual; if everything passes, the
+CI builds, signs (secrets `SIGN_PFX_BASE64` / `SIGN_PFX_PASSWORD`, see
+[docs/code-signing.md](docs/code-signing.md); a tag without them fails) and
+test-installs the MSI as usual; if everything passes, the
 `release` job creates the GitHub Release `v1.14.26-1` with the MSI and its
 `.sha256` attached. It then
 appears under *Releases* on the repository's main page and at
@@ -337,6 +347,7 @@ pipeline** with every external tool replaced by a recorder:
 | Symptom | Fix |
 |---|---|
 | Start menu *RViz* opens a window that closes at once (v1.14.26-1 and v1.14.26-2) | Usually a stale cmd **AutoRun** (left by `conda init` / `micromamba shell init` or an Anaconda uninstall) that makes every `cmd` exit at once. Check with `reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun` (and `HKLM\...`); remove the value if it points to a tool that is gone. To see any other error: Win+R, `cmd /d /k C:\opt\rviz\noetic\launchers\rviz.cmd`. From v1.14.26-3 on, the shortcuts start `cmd /d` (AutoRun is skipped) and the window stays open when RViz fails |
+| "Windows protected your PC" (SmartScreen) or *Unknown publisher* when opening the MSI | Releases before v1.14.26-4 are unsigned. Later ones are signed with an internal certificate: install it (see [docs/code-signing.md](docs/code-signing.md)) for a verified publisher. SmartScreen can still warn on a browser download: *More info > Run anyway*, or Properties > **Unblock** first. Deploying the MSI with Intune avoids it |
 | RViz fails and you need details (v1.14.26-3+) | The launcher window shows the error; package activation output is in `%LOCALAPPDATA%\RVizNoetic\activate.log`, ROS logs in `%USERPROFILE%\.ros\log` |
 | `... cannot be loaded because running scripts is disabled` | `powershell -ExecutionPolicy Bypass -File .\build-rviz-msi.ps1 ...` (and `Unblock-File` for downloaded zips) |
 | `Git for Windows (Git Bash) is required` | Install Git for Windows, or re-run with `-InstallGit` |

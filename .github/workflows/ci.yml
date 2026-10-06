@@ -19,8 +19,8 @@ name: CI
 # artifacts, including from failed runs, so a failure can be diagnosed without
 # re-running it.
 #
-#   release only for version tags (v*): attaches the tested MSI and its
-#           SHA-256 to a GitHub Release, which then shows in the
+#   release only for version tags (v*): attaches the tested, signed MSI and
+#           its SHA-256 to a GitHub Release, which then shows in the
 #           repository's "Releases" sidebar and at /releases/latest.
 
 on:
@@ -124,14 +124,51 @@ jobs:
         shell: pwsh
         run: ./build-rviz-msi.ps1 -CheckOnly -WorkDir C:\rvb
 
+      # Code signing with the internal Robo Care certificate (self-signed; see
+      # docs/code-signing.md). The PFX and its password are repository secrets.
+      # The public certificate in certs/ is trusted on this throwaway runner,
+      # as IT does on team PCs, so `signtool verify /pa` and the test install
+      # check the same chain. Without the secrets the MSI is built unsigned,
+      # except for a release tag, which must be signed.
+      - name: Code-signing certificate
+        shell: pwsh
+        env:
+          SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+          SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+        run: |
+          if (-not $env:SIGN_PFX_BASE64) {
+            if ('${{ github.ref_type }}' -eq 'tag') { throw 'release tags must be signed: secret SIGN_PFX_BASE64 is not set' }
+            Write-Host 'no signing secrets: building an unsigned MSI'; exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_BASE64))
+          $pw = ConvertTo-SecureString $env:SIGN_PFX_PASSWORD -AsPlainText -Force
+          $key = (Get-PfxData -FilePath $pfx -Password $pw).EndEntityCertificates[0]
+          $pub = Get-PfxCertificate -FilePath certs/robo-care-code-signing.cer
+          if ($key.Thumbprint -ne $pub.Thumbprint) { throw "secret PFX ($($key.Thumbprint)) does not match certs/robo-care-code-signing.cer ($($pub.Thumbprint))" }
+          foreach ($store in 'Root', 'TrustedPublisher') {
+            Import-Certificate -FilePath certs/robo-care-code-signing.cer -CertStoreLocation "Cert:\LocalMachine\$store" | Out-Null
+          }
+          "SIGN_PFX=$pfx" >> $env:GITHUB_ENV
+          Write-Host "signing with $($key.Subject) ($($key.Thumbprint)), valid until $($key.NotAfter.ToString('yyyy-MM-dd'))"
+
       # Windows PowerShell 5.1, the edition the README tells people to use.
       # The runner is elevated, so -TestInstall runs the real
       # install / run / uninstall cycle.
       - name: Build the MSI and test-install it
         shell: powershell
+        env:
+          SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
         run: |
-          .\build-rviz-msi.ps1 -WorkDir C:\rvb -BuildNumber ([int]$env:GITHUB_RUN_NUMBER % 100) -TestInstall -HeadlessTest
+          $sign = @{}
+          if ($env:SIGN_PFX) { $sign.SignPfx = $env:SIGN_PFX }
+          .\build-rviz-msi.ps1 -WorkDir C:\rvb -BuildNumber ([int]$env:GITHUB_RUN_NUMBER % 100) -TestInstall -HeadlessTest @sign
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Remove the signing key
+        if: always()
+        shell: pwsh
+        run: Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:RUNNER_TEMP 'signing.pfx')
 
       - name: Upload MSI
         if: success()
@@ -182,6 +219,10 @@ jobs:
           then open **Start menu > RViz (ROS Noetic) > RViz**.
 
           SHA-256: \`$sha\`
+
+          Signed with the Robo Care Team's internal code-signing certificate (SHA-1 \`F8CB7F5A10EBE5DDC4F2CDCBCE3598E0FF97899F\`).
+          Windows shows a verified publisher once [the certificate](${{ github.server_url }}/${{ github.repository }}/blob/$TAG/certs/robo-care-code-signing.cer)
+          is installed; see [docs/code-signing.md](${{ github.server_url }}/${{ github.repository }}/blob/$TAG/docs/code-signing.md).
 
           Built and install-tested by CI run [${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
           EOF
