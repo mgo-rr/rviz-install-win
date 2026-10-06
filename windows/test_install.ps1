@@ -232,7 +232,48 @@ try {
     Write-Host "[test-install]   Library\mesa\rviz.exe --help: $($swHelp.Trim())"
     $before = @((Invoke-Batch "call `"$launchers\rosnode.cmd`" list 2>nul") -split "`r?`n" | Where-Object { $_ -match '^/rviz' })
     $sw = "$LogDir\rviz-software"
-    $procs += Start-Process -FilePath cmd.exe -ArgumentList '/d', '/c', "`"$launchers\rviz-software.cmd`"" -PassThru -NoNewWindow `
+    # Point clouds drawn as Spheres / Flat Squares: their materials have no
+    # technique Mesa supports, and OGRE then asks rviz for a fallback with
+    # rend == nullptr, which crashed rviz before the null check in the patch.
+    $cloudCfg = Join-Path $LogDir 'point_cloud_test.rviz'
+    Set-Content -Path $cloudCfg -Encoding ASCII -Value @(
+      'Visualization Manager:',
+      '  Class: ""',
+      '  Displays:',
+      '    - Class: rviz/Grid',
+      '      Name: Grid',
+      '      Enabled: true',
+      '    - Class: rviz/PointCloud2',
+      '      Name: Spheres',
+      '      Enabled: true',
+      '      Topic: /rviz_msi_cloud',
+      '      Style: Spheres',
+      '      Size (m): 0.05',
+      '    - Class: rviz/PointCloud2',
+      '      Name: Flat Squares',
+      '      Enabled: true',
+      '      Topic: /rviz_msi_cloud',
+      '      Style: Flat Squares',
+      '      Size (m): 0.05',
+      '  Global Options:',
+      '    Fixed Frame: map',
+      '  Name: root')
+    $cloudPub = Join-Path $LogDir 'cloud_publisher.py'
+    Set-Content -Path $cloudPub -Encoding ASCII -Value @(
+      'import math, rospy',
+      'from sensor_msgs.msg import PointCloud2',
+      'from sensor_msgs import point_cloud2',
+      'from std_msgs.msg import Header',
+      'rospy.init_node("cloud_publisher", anonymous=True)',
+      'pub = rospy.Publisher("/rviz_msi_cloud", PointCloud2, queue_size=1)',
+      'pts = [(math.cos(i / 10.0) * 2, math.sin(i / 10.0) * 2, 0.0) for i in range(200)]',
+      'rate = rospy.Rate(5)',
+      'while not rospy.is_shutdown():',
+      '    pub.publish(point_cloud2.create_cloud_xyz32(Header(frame_id="map", stamp=rospy.Time.now()), pts))',
+      '    rate.sleep()')
+    $procs += Start-Process -FilePath cmd.exe -PassThru -WindowStyle Hidden -ArgumentList '/d', '/c', `
+      "`"call `"$launchers\ros_env.bat`" && `"$(Join-Path $Prefix 'python.exe')`" `"$cloudPub`"`""
+    $procs += Start-Process -FilePath cmd.exe -ArgumentList '/d', '/c', "`"$launchers\rviz-software.cmd`" -d `"$cloudCfg`"" -PassThru -NoNewWindow `
       -RedirectStandardOutput "$sw.out.txt" -RedirectStandardError "$sw.err.txt"
     $node = $false
     for ($i = 0; $i -lt 60 -and -not $node; $i++) {
@@ -269,9 +310,11 @@ try {
     # RVIZ_EXPORT fix in the rviz patch.
     $topics = Invoke-Batch "call `"$launchers\rostopic.cmd`" list 2>nul"
     Check ($topics -match '/initialpose') 'rviz has not created its default tools (/initialpose not advertised)'
+    $cloudInfo = Invoke-Batch "call `"$launchers\rostopic.cmd`" info /rviz_msi_cloud 2>nul"
+    Check ($cloudInfo -match 'Subscribers:\s*\r?\n\s*\* /rviz') "software-rendering rviz is not subscribed to the test point cloud: $cloudInfo"
     $swText = (Get-Content "$sw.out.txt", "$sw.err.txt" -Raw -ErrorAction SilentlyContinue) -join "`n"
     Check (-not ($swText -match 'failed to load|PluginlibFactory|Could not load|Ogre::.*Exception')) 'software-rendering rviz reported plugin/OGRE load errors (see rviz-software.*.txt)'
-    Write-Host '[test-install] software-rendering rviz runs and renders with Mesa from Library\mesa'
+    Write-Host '[test-install] software-rendering rviz runs and renders with Mesa from Library\mesa (point clouds as Spheres / Flat Squares included)'
   }
   finally {
     # via cmd: under Windows PowerShell 5.1, `taskkill ... 2>&1` with

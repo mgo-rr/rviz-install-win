@@ -454,3 +454,11 @@ def test_rosbag_launcher(tmp_path):
     assert 'if /i "%~1"=="play" goto play' in cmd
     assert '"%~dp0rosbag_play.py" %*' in cmd and "-W ignore::SyntaxWarning" in cmd
     assert (tmp_path / "launchers" / "rosbag_play.py").read_text() == (REPO / "windows/rosbag_play.py").read_text()
+
+
+def test_rviz_patch_null_check_in_handle_scheme_not_found():
+    # OGRE passes rend == nullptr for materials without a supported technique
+    # (Mesa); rviz crashed in Ogre::UserObjectBindings::getUserAny.
+    patch = (REPO / "patches/1.14.26/0001-windows-msvc-relocatable.patch").read_text(encoding="utf-8")
+    assert "+++ b/src/rviz/selection/selection_manager.cpp" in patch
+    assert '+  bool has_pick_param = rend && !rend->getUserObjectBindings().getUserAny("pick_handle").isEmpty();' in patch

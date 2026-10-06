@@ -106,6 +106,11 @@ based on RoboStack's Windows patch:
   vtable, and rviz crashes at start-up (0xC0000005 in Qt's `connect`, from
   `InitialPoseTool`). RoboStack's patch only exports `EnumProperty`, and its
   prebuilt rviz 1.14.26 crashes the same way (cf. RoboStack/ros-noetic#534).
+* **A null check in `SelectionManager::handleSchemeNotFound`.** On Mesa
+  (software rendering, and Microsoft's D3D12 OpenGL in VMs) the *Spheres* and
+  *Flat Squares* point cloud styles have no supported shader; OGRE then asks
+  rviz for a fallback without a renderable, and rviz crashed. Upstream still
+  has this bug.
 * **Relocatable OGRE plugins.** Upstream bakes the build machine's plugin
   path into `rviz.exe`. The patched lookup order is `RVIZ_OGRE_PLUGIN_DIR`,
   then `CONDA_PREFIX`, then the compiled-in path.

@@ -22,6 +22,12 @@ Derived from RoboStack's ros-noetic-rviz.patch
     rviz::InitialPoseTool::InitialPoseTool (RoboStack's own win-64
     ros-noetic-rviz 1.14.26 build 24 crashes the same way; cf.
     RoboStack/ros-noetic#534).
+  * SelectionManager::handleSchemeNotFound: check `rend` for nullptr.
+    OGRE calls it with rend == nullptr when a material has no supported
+    technique; on Mesa (software rendering, and Microsoft's D3D12 OpenGL)
+    rviz's Sphere/FlatSquare point cloud materials have none, and rviz
+    crashed in Ogre::UserObjectBindings::getUserAny during bag playback.
+    Still unfixed upstream (noetic-devel selection_manager.cpp:1056).
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index b1cd592..7c62956 100644
@@ -354,3 +360,20 @@ index 9311cf3..0c382af 100644
  {
    Q_OBJECT
  public:
+diff --git a/src/rviz/selection/selection_manager.cpp b/src/rviz/selection/selection_manager.cpp
+index 35adf3c..15ae750 100644
+--- a/src/rviz/selection/selection_manager.cpp
++++ b/src/rviz/selection/selection_manager.cpp
+@@ -1052,8 +1052,10 @@ Ogre::Technique* SelectionManager::handleSchemeNotFound(unsigned short /*scheme_
+     culling_mode = orig_tech->getPass(0)->getCullingMode();
+   }
+ 
+-  // find out if the renderable has the picking param set
+-  bool has_pick_param = !rend->getUserObjectBindings().getUserAny("pick_handle").isEmpty();
++  // find out if the renderable has the picking param set. OGRE passes
++  // rend == nullptr when it looks for a fallback for a material without any
++  // supported technique (e.g. rviz's point cloud materials on Mesa).
++  bool has_pick_param = rend && !rend->getUserObjectBindings().getUserAny("pick_handle").isEmpty();
+ 
+   // NOTE: it is important to avoid changing the culling mode of the
+   // fallback techniques here, because that change then propagates to
