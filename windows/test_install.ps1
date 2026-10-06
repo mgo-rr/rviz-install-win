@@ -203,10 +203,22 @@ try {
     Check ($rv.Path -eq (Join-Path $Prefix 'Library\mesa\rviz.exe')) "rviz-software.cmd started $($rv.Path), not Library\mesa\rviz.exe"
     $gl = @($rv.Modules | Where-Object { $_.ModuleName -eq 'opengl32.dll' } | ForEach-Object { $_.FileName })
     Check ($gl.Count -eq 1 -and $gl[0] -eq (Join-Path $Prefix 'Library\mesa\opengl32.dll')) "software-rendering rviz uses opengl32.dll from '$($gl -join ', ')', not Library\mesa"
+    # rviz's stdout is block-buffered when redirected, so its log lines are not
+    # in rviz-software.out.txt while it runs (and --ogre-log writes no file:
+    # rviz never sets a log file name). So: Mesa's driver (libgallium_wgl.dll)
+    # must be loaded from Library\mesa, and rviz must get past its render
+    # system to its tools (/initialpose below) and keep running - OGRE cannot
+    # create the render window without a working OpenGL context.
+    $gallium = @($rv.Modules | Where-Object { $_.ModuleName -eq 'libgallium_wgl.dll' } | ForEach-Object { $_.FileName })
+    Write-Host "[test-install]   rviz.exe: $($rv.Path); opengl32.dll: $($gl -join ', '); libgallium_wgl.dll: $($gallium -join ', ')"
+    Check ($gallium.Count -eq 1 -and $gallium[0] -eq (Join-Path $Prefix 'Library\mesa\libgallium_wgl.dll')) 'software-rendering rviz has no Mesa OpenGL context (libgallium_wgl.dll from Library\mesa not loaded)'
+    # InitialPoseTool (the default "2D Pose Estimate" tool) advertises
+    # /initialpose; its constructor is where rviz crashed before the
+    # RVIZ_EXPORT fix in the rviz patch.
+    $topics = Invoke-Batch "call `"$launchers\rostopic.cmd`" list 2>nul"
+    Check ($topics -match '/initialpose') 'rviz has not created its default tools (/initialpose not advertised)'
     $swText = (Get-Content "$sw.out.txt", "$sw.err.txt" -Raw -ErrorAction SilentlyContinue) -join "`n"
-    Check ($swText -match 'OpenGl version') 'software-rendering rviz printed no OpenGL version (see rviz-software.*.txt)'
     Check (-not ($swText -match 'failed to load|PluginlibFactory|Could not load|Ogre::.*Exception')) 'software-rendering rviz reported plugin/OGRE load errors (see rviz-software.*.txt)'
-    ($swText -split "`r?`n") | Where-Object { $_ -match 'software rendering|OpenGL device|OpenGl version' } | ForEach-Object { Write-Host "[test-install]   $($_.Trim())" }
     Write-Host '[test-install] software-rendering rviz runs and renders with Mesa from Library\mesa'
   }
   finally {
