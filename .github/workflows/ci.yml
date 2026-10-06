@@ -178,6 +178,16 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+      # A build whose MSI was produced but failed the test-install is still
+      # useful for debugging on a real PC; the name says it is untested.
+      - name: Upload MSI (failed tests)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rviz-msi-UNTESTED
+          path: dist/
+          if-no-files-found: ignore
+
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v7

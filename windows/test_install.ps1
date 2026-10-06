@@ -27,6 +27,17 @@ function Show-Tail([string]$Path, [int]$Lines = 40) {
 }
 function Check($cond, $msg) { if (-not $cond) { throw $msg } }
 
+# Windows Error Reporting's record of the latest crashes (faulting module and
+# offset), so a crash with no output of its own can still be diagnosed.
+function Show-CrashEvent([datetime]$Since) {
+  $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; StartTime = $Since } -MaxEvents 3 -ErrorAction SilentlyContinue)
+  if (-not $events) { Write-Host '[test-install] (no Application Error event recorded)'; return }
+  foreach ($e in $events) {
+    Write-Host "[test-install] ---- crash recorded at $($e.TimeCreated.ToString('HH:mm:ss')) ----"
+    ($e.Message -split "`r?`n") | Where-Object { $_ } | Select-Object -First 12 | ForEach-Object { Write-Host "  $_" }
+  }
+}
+
 # Run a snippet of batch code in a fresh cmd.exe and return its output.
 # -Paths turns '/' into '\' for comparing printed file paths; it must not be
 # used for ROS output, where '/rosout' would become '\rosout'.
@@ -136,6 +147,11 @@ try {
     # with Mesa's opengl32.dll, and the default rviz.exe must not.
     Write-Host '[test-install] RViz (software rendering): rviz window with Mesa llvmpipe'
     Get-Process -Name rviz -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    $swStart = Get-Date
+    # --help exits before any OpenGL work: a crash here is a loader problem
+    # (DLLs next to the copied rviz.exe), not a rendering one.
+    $swHelp = Invoke-Batch "call `"$launchers\ros_env.bat`"`r`n`"%RVIZ_ROOT%\Library\mesa\rviz.exe`" --help >nul 2>&1`r`necho exit=%ERRORLEVEL%"
+    Write-Host "[test-install]   Library\mesa\rviz.exe --help: $($swHelp.Trim())"
     $before = @((Invoke-Batch "call `"$launchers\rosnode.cmd`" list 2>nul") -split "`r?`n" | Where-Object { $_ -match '^/rviz' })
     $sw = "$LogDir\rviz-software"
     $procs += Start-Process -FilePath cmd.exe -ArgumentList '/d', '/c', "`"$launchers\rviz-software.cmd`"" -PassThru -NoNewWindow `
@@ -146,11 +162,11 @@ try {
       $now = @((Invoke-Batch "call `"$launchers\rosnode.cmd`" list 2>nul") -split "`r?`n" | Where-Object { $_ -match '^/rviz' })
       $node = @($now | Where-Object { $before -notcontains $_ }).Count -gt 0
     }
-    if (-not $node) { Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt" }
+    if (-not $node) { Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt"; Show-CrashEvent $swStart }
     Check $node 'software-rendering rviz did not register with the master within 120 s (see rviz-software.*.txt)'
     Start-Sleep -Seconds 15                                # let it render the default displays
     $rv = Get-Process -Name rviz -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $rv) { Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt" }
+    if (-not $rv) { Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt"; Show-CrashEvent $swStart }
     Check ($null -ne $rv) 'software-rendering rviz.exe exited after starting (see rviz-software.*.txt)'
     Check ($rv.Path -eq (Join-Path $Prefix 'Library\mesa\rviz.exe')) "rviz-software.cmd started $($rv.Path), not Library\mesa\rviz.exe"
     $gl = @($rv.Modules | Where-Object { $_.ModuleName -eq 'opengl32.dll' } | ForEach-Object { $_.FileName })
@@ -162,7 +178,10 @@ try {
     Write-Host '[test-install] software-rendering rviz runs and renders with Mesa from Library\mesa'
   }
   finally {
-    foreach ($p in $procs) { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null }
+    # via cmd: under Windows PowerShell 5.1, `taskkill ... 2>&1` with
+    # $ErrorActionPreference = 'Stop' throws on "process not found" (a launcher
+    # that already exited), and that error would replace the real failure.
+    foreach ($p in $procs) { & cmd.exe /d /c "taskkill /T /F /PID $($p.Id) >nul 2>&1" }
     Get-Process -Name rviz, rosmaster, rosout -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Prefix\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2                                 # release file locks before uninstall
