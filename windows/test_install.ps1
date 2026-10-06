@@ -65,7 +65,7 @@ if ($rc -ne 0 -and $rc -ne 3010) { Fail "msiexec /i returned $rc (see $LogDir\in
 $failure = $null
 try {
   $launchers = Join-Path $Prefix 'launchers'
-  foreach ($f in 'rviz.cmd', 'roscore.cmd', 'ros_env.bat', 'rospack.cmd') {
+  foreach ($f in 'rviz.cmd', 'rviz-software.cmd', 'roscore.cmd', 'ros_env.bat', 'rospack.cmd') {
     Check (Test-Path (Join-Path $launchers $f)) "missing $f"
   }
 
@@ -130,6 +130,36 @@ try {
     Check (-not ($rvizLog -match 'failed to load|PluginlibFactory|Could not load|Ogre::.*Exception')) 'rviz reported plugin/OGRE load errors (see rviz.*.txt)'
     Write-Host '[test-install] roscore, rostopic and rviz (default displays) run from the bundle'
     }
+
+    # ---- RViz (software rendering): Mesa llvmpipe needs no GPU, so this opens
+    # a real rviz window even on CI runners. It must run Library\mesa\rviz.exe
+    # with Mesa's opengl32.dll, and the default rviz.exe must not.
+    Write-Host '[test-install] RViz (software rendering): rviz window with Mesa llvmpipe'
+    Get-Process -Name rviz -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    $before = @((Invoke-Batch "call `"$launchers\rosnode.cmd`" list 2>nul") -split "`r?`n" | Where-Object { $_ -match '^/rviz' })
+    $sw = "$LogDir\rviz-software"
+    $procs += Start-Process -FilePath cmd.exe -ArgumentList '/d', '/c', "`"$launchers\rviz-software.cmd`"" -PassThru -NoNewWindow `
+      -RedirectStandardOutput "$sw.out.txt" -RedirectStandardError "$sw.err.txt"
+    $node = $false
+    for ($i = 0; $i -lt 60 -and -not $node; $i++) {
+      Start-Sleep -Seconds 2
+      $now = @((Invoke-Batch "call `"$launchers\rosnode.cmd`" list 2>nul") -split "`r?`n" | Where-Object { $_ -match '^/rviz' })
+      $node = @($now | Where-Object { $before -notcontains $_ }).Count -gt 0
+    }
+    if (-not $node) { Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt" }
+    Check $node 'software-rendering rviz did not register with the master within 120 s (see rviz-software.*.txt)'
+    Start-Sleep -Seconds 15                                # let it render the default displays
+    $rv = Get-Process -Name rviz -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $rv) { Show-Tail "$sw.out.txt"; Show-Tail "$sw.err.txt" }
+    Check ($null -ne $rv) 'software-rendering rviz.exe exited after starting (see rviz-software.*.txt)'
+    Check ($rv.Path -eq (Join-Path $Prefix 'Library\mesa\rviz.exe')) "rviz-software.cmd started $($rv.Path), not Library\mesa\rviz.exe"
+    $gl = @($rv.Modules | Where-Object { $_.ModuleName -eq 'opengl32.dll' } | ForEach-Object { $_.FileName })
+    Check ($gl.Count -eq 1 -and $gl[0] -eq (Join-Path $Prefix 'Library\mesa\opengl32.dll')) "software-rendering rviz uses opengl32.dll from '$($gl -join ', ')', not Library\mesa"
+    $swText = (Get-Content "$sw.out.txt", "$sw.err.txt" -Raw -ErrorAction SilentlyContinue) -join "`n"
+    Check ($swText -match 'OpenGl version') 'software-rendering rviz printed no OpenGL version (see rviz-software.*.txt)'
+    Check (-not ($swText -match 'failed to load|PluginlibFactory|Could not load|Ogre::.*Exception')) 'software-rendering rviz reported plugin/OGRE load errors (see rviz-software.*.txt)'
+    ($swText -split "`r?`n") | Where-Object { $_ -match 'software rendering|OpenGL device|OpenGl version' } | ForEach-Object { Write-Host "[test-install]   $($_.Trim())" }
+    Write-Host '[test-install] software-rendering rviz runs and renders with Mesa from Library\mesa'
   }
   finally {
     foreach ($p in $procs) { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null }
@@ -148,6 +178,10 @@ try {
   $menu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
   $rvizLnk = Get-ChildItem -Path $menu -Recurse -Filter 'RViz.lnk' | Select-Object -First 1
   Check $rvizLnk 'Start menu shortcut not found'
+  $swLnk = Get-ChildItem -Path $menu -Recurse -Filter 'RViz (software rendering).lnk' | Select-Object -First 1
+  Check $swLnk 'Start menu shortcut "RViz (software rendering)" not found'
+  $swSc = (New-Object -ComObject WScript.Shell).CreateShortcut($swLnk.FullName)
+  Check ($swSc.TargetPath -like '*\cmd.exe' -and $swSc.Arguments -match '^/d /c ' -and $swSc.Arguments -like "*$launchers\rviz-software.cmd*") "software-rendering shortcut is not 'cmd.exe /d /c ...rviz-software.cmd' ($($swSc.TargetPath) $($swSc.Arguments))"
   $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($rvizLnk.FullName)
   Write-Host "[test-install]   shortcut: $($sc.TargetPath) $($sc.Arguments)"
   Check ($sc.TargetPath -like '*\cmd.exe' -and (Test-Path -LiteralPath $sc.TargetPath)) "RViz shortcut does not start cmd.exe ($($sc.TargetPath))"

@@ -155,15 +155,15 @@ Pinned defaults (versions, hashes, product identity, UpgradeCode) live in
 * Per-machine install to the **fixed** path `C:\opt\rviz\noetic`. The path is
   set at build time because the conda prefixes inside the payload are
   rewritten to it. To change it, rebuild with `-Prefix`.
-* **Start menu > RViz (ROS Noetic)**: *RViz*, *roscore*, *ROS Noetic Shell*,
-  *Third-party notices*.
+* **Start menu > RViz (ROS Noetic)**: *RViz*, *RViz (software rendering)*,
+  *roscore*, *ROS Noetic Shell*, *Third-party notices*.
 * Optional features (feature-tree UI):
   * *Add launchers to system PATH* (on by default). Only
     `C:\opt\rviz\noetic\launchers` is added, at the end of PATH, so an
     existing ROS install keeps priority and the bundled DLLs never shadow
     other software.
   * *Desktop shortcut* (off by default).
-* Launchers in `launchers\`: `rviz.cmd`, `roscore.cmd`, `roslaunch.cmd`,
+* Launchers in `launchers\`: `rviz.cmd`, `rviz-software.cmd`, `roscore.cmd`, `roslaunch.cmd`,
   `rostopic.cmd`, `rosnode.cmd`, `rosservice.cmd`, `rosparam.cmd`,
   `rosmsg.cmd`, `rossrv.cmd`, `rospack.cmd`, `ros_shell.cmd`, and
   `ros_env.bat` (call this from your own scripts to get the ROS environment).
@@ -205,6 +205,23 @@ Switches (environment variables, e.g. set once with `setx`):
 |---|---|
 | `RVIZ_AUTO_ROSCORE=0` | never start a local roscore |
 | `RVIZ_KEEP_ROSCORE=1` | leave the auto-started roscore running after RViz closes |
+| `RVIZ_SOFTWARE_GL=1` | always use software rendering (what the shortcut below does) |
+
+### No GPU driver: RViz (software rendering)
+
+RViz needs OpenGL. Virtual machines (e.g. QEMU/KVM, even with virtio 3D
+acceleration: Windows guests get no OpenGL from it) and some remote desktop
+sessions have none, and *RViz* then crashes right after start
+(error code -1073741819). **Start menu > RViz (ROS Noetic) > RViz (software
+rendering)** runs the same launcher with Mesa's llvmpipe, which renders on the
+CPU: slower, especially with point clouds or camera images, but it needs no
+GPU driver. Its window title says *software rendering*.
+
+How it is kept apart: Windows loads `opengl32.dll` from the program's own
+folder before `System32`, so Mesa's `opengl32.dll` and `libgallium_wgl.dll` live
+in `Library\mesa\` next to a copy of `rviz.exe` that only
+`launchers\rviz-software.cmd` starts. The normal *RViz* shortcut runs
+`Library\bin\rviz.exe` and always uses the PC's own graphics driver.
 
 The other shortcuts: *roscore* starts a master on its own, *ROS Noetic Shell*
 opens a command prompt with `rostopic`, `rosnode`, `roslaunch`, ... ready.
@@ -359,7 +376,7 @@ pipeline** with every external tool replaced by a recorder:
 | build: path too long | Use a shorter `-WorkDir` (e.g. `C:\b`) or enable Win32 long paths |
 | smoke: rviz.exe did not start | See `C:\rvb\out\smoke\rviz-help.txt`. Usually a missing DLL: check that `config\prune.txt` / `build-only-packages.txt` didn't remove it |
 | finalize: `runtime dependency check failed` | The message lists the missing ROS package or DLL; add the conda package to `config\conda-packages.txt` or `-ExtraPackages` |
-| rviz window black / crashes on start (target PC) | OGRE needs a real OpenGL driver. VMs and RDP sessions without GPU support fail. Update the GPU driver |
+| rviz window black / crashes on start (target PC), error code -1073741819 | OGRE needs a real OpenGL driver. VMs and RDP sessions without GPU support fail: use *RViz (software rendering)* (from v1.14.26-5). On a PC with a GPU, update its driver |
 | ICE validation errors | Inspect the output; `-SkipValidate` for a quick test build |
 
 ## Notes & licensing

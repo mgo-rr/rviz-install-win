@@ -66,6 +66,14 @@ libblas=*=*openblas
 # headless build matches RoboStack's current cv_bridge, so the solver fell back
 # to an older RoboStack build set on Python 3.11 (CI run 13).
 
+# --- Software OpenGL for Start menu > "RViz (software rendering)" -----------
+# VMs and some remote desktop sessions have no usable OpenGL driver, and
+# rviz.exe crashes in OGRE there. Mesa's llvmpipe renders on the CPU instead.
+# finalize moves Mesa's opengl32.dll out of Library\bin (next to rviz.exe it
+# would replace the GPU driver for every launch) into Library\mesa, beside a
+# copy of rviz.exe that only launchers\rviz-software.cmd starts.
+mesa-llvmpipe
+
 # --- Build tools (stripped from the payload) ---------------------------------
 # Noetic's message generators (genmsg/gencpp/genpy) use the empy 3 API; empy 4
 # removed it ("module 'em' has no attribute 'RAW_OPT'"), so pin below 4.

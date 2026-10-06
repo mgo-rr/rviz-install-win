@@ -86,6 +86,7 @@ DLL_ROOTS = [
     "Library/bin/RenderSystem_GL.dll", "Library/bin/Plugin_*.dll",
     "Library/bin/Codec_*.dll", "Library/plugins/platforms/*.dll",
     "Library/plugins/imageformats/*.dll", "Library/bin/*image_transport*.dll",
+    "Library/mesa/*.exe", "Library/mesa/*.dll",
 ]
 # Directories searched for a DLL besides the importing binary's own folder,
 # in the same order as the PATH set by launchers/ros_env.bat. Library/lib is
@@ -93,6 +94,17 @@ DLL_ROOTS = [
 # a plain `DESTINATION lib`, which on Windows puts them next to the .lib files.
 DLL_SEARCH_DIRS = ["", "Library/mingw-w64/bin", "Library/usr/bin", "Library/bin",
                    "Scripts", "bin", "DLLs", "Library/lib"]
+
+# Software OpenGL (Mesa llvmpipe, conda package mesa-llvmpipe). Windows loads
+# opengl32.dll from the executable's folder before System32, so Mesa's copy must
+# NOT stay next to Library\bin\rviz.exe (it would replace the GPU driver for
+# every launch). finalize moves it to MESA_DIR, next to a copy of rviz.exe that
+# only launchers\rviz-software.cmd starts. rviz.exe's other DLLs and the OGRE
+# plugins are found through PATH; OGRE 1.10 loads plugins with the standard
+# search order, so RenderSystem_GL.dll also gets Mesa's opengl32.dll.
+MESA_DIR = "Library/mesa"
+MESA_DLLS = ["opengl32.dll", "libgallium_wgl.dll"]
+MESA_OPTIONAL_DLLS = ["libglapi.dll"]          # older Mesa builds split this out
 
 # ROS command-line tools that get a thin launcher in <prefix>\launchers\.
 ROS_TOOLS = [
@@ -377,6 +389,34 @@ def verify_required(stage: Path) -> None:
     log("all required runtime files present")
 
 
+def isolate_mesa(stage: Path) -> None:
+    """Move Mesa's OpenGL DLLs from Library/bin to MESA_DIR and put a copy of
+    rviz.exe (and Qt's qt.conf, whose relative prefix stays valid one level
+    below Library) next to them."""
+    bin_dir, mesa = stage / "Library" / "bin", stage / MESA_DIR
+    missing = [n for n in MESA_DLLS + ["rviz.exe"] if not (bin_dir / n).is_file()]
+    if missing:
+        die("software rendering: missing in Library/bin: " + ", ".join(missing)
+            + " (is mesa-llvmpipe in config/conda-packages.txt?)")
+    mesa.mkdir(parents=True, exist_ok=True)
+    for name in MESA_DLLS + MESA_OPTIONAL_DLLS:
+        if (bin_dir / name).is_file():
+            shutil.move(str(bin_dir / name), str(mesa / name))
+    for name in ("rviz.exe", "qt.conf"):
+        if (bin_dir / name).is_file():
+            shutil.copy2(bin_dir / name, mesa / name)
+    log(f"software rendering: Mesa OpenGL + rviz.exe copy in {MESA_DIR}")
+
+
+def verify_gpu_path(stage: Path) -> None:
+    """The default rviz.exe must use the system's (GPU vendor's) OpenGL."""
+    leftovers = [n for n in MESA_DLLS + MESA_OPTIONAL_DLLS
+                 if (stage / "Library" / "bin" / n).exists()]
+    if leftovers:
+        die("Library/bin must not contain Mesa's " + ", ".join(leftovers)
+            + ": Library/bin/rviz.exe would use software OpenGL even with a GPU")
+
+
 # --------------------------------------------------------------------------- #
 # ROS package dependency check
 # --------------------------------------------------------------------------- #
@@ -625,6 +665,7 @@ rem A remote master (a robot) is never touched: RViz just connects to it.
 rem   RVIZ_AUTO_ROSCORE=0   never start a local roscore
 rem   RVIZ_KEEP_ROSCORE=1   leave the auto-started roscore running after RViz
 rem   RVIZ_NO_PAUSE=1       do not keep the window open after a failure
+rem   RVIZ_SOFTWARE_GL=1    software OpenGL (Mesa llvmpipe), see rviz-software.cmd
 rem If RViz fails, the window stays open with the error and the log location,
 rem so a Start menu launch never just flashes and disappears.
 rem (goto, not blocks, so that arguments containing parentheses survive.)
@@ -638,6 +679,15 @@ set "RVIZ_INTERACTIVE=1"
 if /i "%~1"=="--help" set "RVIZ_INTERACTIVE="
 if /i "%~1"=="-h" set "RVIZ_INTERACTIVE="
 if "%RVIZ_NO_PAUSE%"=="1" set "RVIZ_INTERACTIVE="
+set "RVIZ_EXE=%RVIZ_ROOT%\Library\bin\rviz.exe"
+if not "%RVIZ_SOFTWARE_GL%"=="1" goto gl_chosen
+rem Library\mesa holds Mesa's opengl32.dll next to a copy of rviz.exe; Windows
+rem loads opengl32.dll from the executable's folder before System32.
+set "RVIZ_EXE=%RVIZ_ROOT%\Library\mesa\rviz.exe"
+set "GALLIUM_DRIVER=llvmpipe"
+title RViz (ROS Noetic, software rendering)
+echo [rviz] software rendering (Mesa llvmpipe): slower, but needs no GPU driver
+:gl_chosen
 echo [rviz] ROS_MASTER_URI=%ROS_MASTER_URI%
 if /i "%~1"=="--help" goto run
 if /i "%~1"=="-h" goto run
@@ -669,7 +719,7 @@ echo [rviz] roscore is up
 :run
 if "%RVIZ_LAUNCHER_DRYRUN%"=="1" goto dry_run
 echo [rviz] starting RViz ...
-"%RVIZ_ROOT%\Library\bin\rviz.exe" %*
+"%RVIZ_EXE%" %*
 set "RC=%ERRORLEVEL%"
 goto finish
 :dry_run
@@ -689,6 +739,7 @@ if not defined RH set "RH=%USERPROFILE%\.ros"
 echo [rviz]   %RH%\log
 echo [rviz] A common cause is a missing or too old OpenGL graphics driver
 echo [rviz] (e.g. some remote desktop sessions and virtual machines).
+if not "%RVIZ_SOFTWARE_GL%"=="1" echo [rviz] Without a working GPU driver, use Start menu - RViz (software rendering).
 if defined RVIZ_ACTIVATE_LOG echo [rviz] Environment setup log: %RVIZ_ACTIVATE_LOG%
 if defined RVIZ_INTERACTIVE pause
 exit /b %RC%
@@ -714,6 +765,19 @@ echo [rviz] stopping the roscore it started (PID %RPID%)
 taskkill /T /F /PID %RPID% >nul 2>&1
 del "%RH%\roscore-11311.pid" >nul 2>&1
 exit /b 0
+"""
+
+RVIZ_SOFTWARE_CMD = r"""@echo off
+rem ---------------------------------------------------------------------------
+rem rviz-software.cmd - RViz with software OpenGL (Mesa llvmpipe, on the CPU)
+rem (Start menu > RViz (software rendering)). For PCs without a usable GPU
+rem driver: virtual machines, some remote desktop sessions. Slower than
+rem rviz.cmd; otherwise the same (local roscore, arguments, error window).
+rem ---------------------------------------------------------------------------
+setlocal
+set "RVIZ_SOFTWARE_GL=1"
+call "%~dp0rviz.cmd" %*
+exit /b %ERRORLEVEL%
 """
 
 TOOL_SHIM = r"""@echo off
@@ -767,6 +831,7 @@ def write_launchers(stage: Path, prefix: str) -> None:
 
     w("ros_env.bat", ROS_ENV_BAT.replace("{prefix}", prefix))
     w("rviz.cmd", RVIZ_CMD)
+    w("rviz-software.cmd", RVIZ_SOFTWARE_CMD)
     w("ros_shell.cmd", ROS_SHELL_CMD)
     for tool in ROS_TOOLS:
         w(f"{tool}.cmd", TOOL_SHIM.replace("{tool}", tool))
@@ -829,7 +894,9 @@ def cmd_finalize(a) -> None:
         remove_path(stage / rel)
 
     prune(stage, read_list(cfg / "prune.txt"), keep_pdb=bool(a.keep_pdb))
+    isolate_mesa(stage)
     verify_required(stage)
+    verify_gpu_path(stage)
     verify_runtime(stage, set(pkgs))
     write_launchers(stage, a.prefix)
     count, size = write_manifest(stage, kept, Path(a.report_dir))

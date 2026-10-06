@@ -44,6 +44,9 @@ def stage(tmp_path):
                               "Library/bin/Plugin_OctreeSceneManager.dll",
                               "Library/bin/Plugin_ParticleFX.dll",
                               "Library/include/OGRE/Ogre.h", "Library/bin/OgreMain.pdb"])
+    make_pkg(st, pk, "mesa-llvmpipe", ["Library/bin/opengl32.dll", "Library/bin/libgallium_wgl.dll",
+                                       "Library/lib/opengl32.lib"], license_="MIT")
+    (st / "Library/bin/qt.conf").write_text("[Paths]\nPrefix = ../\n")
     # rviz build output is unmanaged (no conda-meta entry)
     for rel in required + ["Library/share/rviz/ogre_media/x.material",
                            "Library/share/rviz/cmake/rvizConfig.cmake",
@@ -116,6 +119,14 @@ def test_finalize_end_to_end(stage, monkeypatch):
     assert not (st / "Lib/test").exists()
     assert not (st / "Library/lib/Qt5Core.lib").exists()
     assert not (st / "Library/bin/designer.exe").exists()
+    # software rendering: Mesa's OpenGL is moved away from the default rviz.exe
+    mesa = st / "Library/mesa"
+    for name in ("opengl32.dll", "libgallium_wgl.dll", "rviz.exe", "qt.conf"):
+        assert (mesa / name).is_file(), name
+    assert not (st / "Library/bin/opengl32.dll").exists()
+    assert not (st / "Library/bin/libgallium_wgl.dll").exists()
+    assert (st / "Library/bin/rviz.exe").is_file()
+    assert (st / "launchers/rviz-software.cmd").is_file()
     assert not (st / "Library/bin/OgreMain.pdb").exists()
     assert not (st / "Lib/__pycache__").exists()
     assert not (st / "Library/share/rviz/cmake").exists()
@@ -320,3 +331,34 @@ def test_rviz_launcher_auto_roscore(tmp_path):
     assert "Environment setup log: %RVIZ_ACTIVATE_LOG%" in text
     shell = (tmp_path / "launchers" / "ros_shell.cmd").read_bytes().decode("ascii")
     assert '"%ComSpec%" /d /k' in shell
+
+
+def test_finalize_requires_mesa(stage, monkeypatch):
+    st, pk, src, tmp = stage
+    monkeypatch.setattr(rvizmsi, "pe_imports", fake_imports)
+    (st / "Library/bin/opengl32.dll").unlink()
+    with pytest.raises(SystemExit):
+        rvizmsi.main(["finalize", "--stage", str(st), "--config-dir", str(REPO / "config"),
+                      "--rviz-src", str(src), "--prefix", r"C:\opt\rviz\noetic",
+                      "--pkgs-dir", str(pk), "--report-dir", str(tmp / "out")])
+
+
+def test_verify_gpu_path_rejects_mesa_next_to_rviz(tmp_path):
+    (tmp_path / "Library/bin").mkdir(parents=True)
+    rvizmsi.verify_gpu_path(tmp_path)
+    (tmp_path / "Library/bin/opengl32.dll").write_text("x")
+    with pytest.raises(SystemExit):
+        rvizmsi.verify_gpu_path(tmp_path)
+
+
+def test_rviz_software_launcher(tmp_path):
+    rvizmsi.write_launchers(tmp_path, r"C:\opt\rviz\noetic")
+    sw = (tmp_path / "launchers" / "rviz-software.cmd").read_bytes().decode("ascii")
+    assert 'set "RVIZ_SOFTWARE_GL=1"' in sw and 'call "%~dp0rviz.cmd" %*' in sw
+    text = (tmp_path / "launchers" / "rviz.cmd").read_bytes().decode("ascii")
+    # the default path is the GPU rviz.exe; only RVIZ_SOFTWARE_GL=1 switches
+    gpu = text.index('set "RVIZ_EXE=%RVIZ_ROOT%\\Library\\bin\\rviz.exe"')
+    assert text.index('if not "%RVIZ_SOFTWARE_GL%"=="1" goto gl_chosen') > gpu
+    assert 'set "RVIZ_EXE=%RVIZ_ROOT%\\Library\\mesa\\rviz.exe"' in text
+    assert '"%RVIZ_EXE%" %*' in text and "Library\\bin\\rviz.exe\" %*" not in text
+    assert "use Start menu - RViz (software rendering)" in text

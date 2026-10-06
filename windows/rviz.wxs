@@ -95,6 +95,11 @@
                     Target="[System64Folder]cmd.exe"
                     Arguments="/d /c &quot;&quot;[INSTALLFOLDER]launchers\rviz.cmd&quot;&quot;"
                     WorkingDirectory="INSTALLFOLDER" Icon="rviz.ico" />
+          <Shortcut Id="StartRvizSoftware" Name="RViz (software rendering)"
+                    Description="RViz with CPU-based OpenGL (Mesa) for PCs without a usable GPU driver, e.g. virtual machines"
+                    Target="[System64Folder]cmd.exe"
+                    Arguments="/d /c &quot;&quot;[INSTALLFOLDER]launchers\rviz-software.cmd&quot;&quot;"
+                    WorkingDirectory="INSTALLFOLDER" Icon="rviz.ico" />
           <Shortcut Id="StartRoscore" Name="roscore"
                     Description="Start a local ROS master"
                     Target="[System64Folder]cmd.exe"
