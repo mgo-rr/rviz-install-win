@@ -402,18 +402,18 @@ Work dir (`C:\rvb`): `tools\` (micromamba, dotnet, wix), `mamba\pkgs`
 Tag a commit on `main` and push the tag:
 
 ```bash
-git tag -a v1.14.26-6 -m "RViz 1.14.26 installer, build 6"
-git push origin v1.14.26-6
+git tag -a v1.14.26-7 -m "RViz 1.14.26 installer, build 7"
+git push origin v1.14.26-7
 ```
 
 Use the next unused number. Never reuse one, not even of a deleted release
-(v1.14.26-1 to -4 were withdrawn test builds): a reused tag could be mistaken
+(v1.14.26-1 to -5 were withdrawn test builds): a reused tag could be mistaken
 for an old download.
 
 CI builds, signs (secrets `SIGN_PFX_BASE64` / `SIGN_PFX_PASSWORD`, see
 [docs/code-signing.md](docs/code-signing.md); a tag without them fails) and
 test-installs the MSI as usual; if everything passes, the
-`release` job creates the GitHub Release `v1.14.26-6` with the MSI and its
+`release` job creates the GitHub Release `v1.14.26-7` with the MSI and its
 `.sha256` attached. It then
 appears under *Releases* on the repository's main page and at
 `/releases/latest`. A failed build publishes nothing; delete the tag, fix,
@@ -459,7 +459,7 @@ pipeline** with every external tool replaced by a recorder:
 | build: path too long | Use a shorter `-WorkDir` (e.g. `C:\b`) or enable Win32 long paths |
 | smoke: rviz.exe did not start | See `C:\rvb\out\smoke\rviz-help.txt`. Usually a missing DLL: check that `config\prune.txt` / `build-only-packages.txt` didn't remove it |
 | finalize: `runtime dependency check failed` | The message lists the missing ROS package or DLL; add the conda package to `config\conda-packages.txt` or `-ExtraPackages` |
-| An early test build (v1.14.26-1 to -4, withdrawn) is installed: RViz exits right after `OpenGl version: ...` with error code -1073741819 | A bug in rviz's Windows build (missing `RVIZ_EXPORT` on property classes; RoboStack's own rviz has it too), fixed from v1.14.26-5. Uninstall the old version and install the current release |
+| An early test build (v1.14.26-1 to -4, withdrawn) is installed: RViz exits right after `OpenGl version: ...` with error code -1073741819 | A bug in rviz's Windows build (missing `RVIZ_EXPORT` on property classes; RoboStack's own rviz has it too), fixed in the current release. Uninstall the old version and install the current release |
 | rviz window black / crashes on start (target PC), error code -1073741819 | OGRE needs a real OpenGL driver. VMs and RDP sessions without GPU support fail: use *RViz (software rendering)*. On a PC with a GPU, update its driver |
 | ICE validation errors | Inspect the output; `-SkipValidate` for a quick test build |
 
